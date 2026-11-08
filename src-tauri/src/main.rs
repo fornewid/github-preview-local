@@ -223,7 +223,7 @@ fn run_check(handle: tauri::AppHandle, app: State<'_, AppState>, name: String) -
         };
         emit(Some("running"), None, None);
         // Output arrives batched (at most ~10 events per second).
-        let code = checks::run(&def, &root, &env, &cancel, |c| emit(None, Some(c), None));
+        let code = checks::run(&def, &root, &env, &cancel, Some(256 * 1024), |c| emit(None, Some(c), None));
         let status = if cancel.load(Ordering::SeqCst) {
             "cancelled"
         } else if code == Some(0) {
@@ -443,17 +443,17 @@ fn main() {
             }
             static STOP: AtomicBool = AtomicBool::new(false);
             // Ctrl-C / SIGTERM: stop the running check's whole process group, then exit.
-            let _ = ctrlc::set_handler(|| STOP.store(true, Ordering::SeqCst));
+            proc::on_terminate(|| STOP.store(true, Ordering::SeqCst));
             let mut results = vec![];
             for d in &defs {
+                if STOP.load(Ordering::SeqCst) {
+                    break;
+                }
                 if !json {
                     eprintln!("── {} ── $ {}", d.name, d.run);
                 }
                 let mut output = String::new();
-                if STOP.load(Ordering::SeqCst) {
-                    break;
-                }
-                let code = checks::run(d, &git.root, &env, &STOP, |c| {
+                let code = checks::run(d, &git.root, &env, &STOP, None, |c| {
                     if !json {
                         eprint!("{c}");
                     }
@@ -461,12 +461,12 @@ fn main() {
                 });
                 let ok = code == Some(0);
                 if !json {
-                    eprintln!(
-                        "{} {} (exit {})\n",
-                        if ok { "✓" } else { "✗" },
-                        d.name,
-                        code.map(|c| c.to_string()).unwrap_or("timeout".into())
-                    );
+                    let how = match code {
+                        Some(c) => format!("exit {c}"),
+                        None if STOP.load(Ordering::SeqCst) => "interrupted".into(),
+                        None => "timed out".into(),
+                    };
+                    eprintln!("{} {} ({how})\n", if ok { "✓" } else { "✗" }, d.name);
                 }
                 let tail: String = output.chars().rev().take(4000).collect::<Vec<_>>().into_iter().rev().collect();
                 results.push(serde_json::json!({ "name": d.name, "run": d.run, "success": ok, "exitCode": code, "outputTail": tail }));
@@ -536,7 +536,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             // Ctrl-C / SIGTERM / SIGHUP (e.g. the agent stops prv): exit cleanly so running checks are killed.
             let handle = app.handle().clone();
-            let _ = ctrlc::set_handler(move || handle.exit(130));
+            proc::on_terminate(move || handle.exit(130));
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 // Links (PR template, comments) open in the browser instead of replacing the UI.
                 .on_navigation(|url| {

@@ -44,34 +44,48 @@ fn gh(git: &Git) -> Command {
     c
 }
 
-/// The open pull request from this repository's head branch into the base
-/// branch, if any (one API call). Pull requests from forks that happen to use
-/// the same branch name are ignored.
-pub fn find_pr(git: &Git, s: &Snapshot) -> Result<Option<ExistingPr>, String> {
+/// Open pull requests from this repository's head branch (one API call).
+/// Returns (PR into the previewed base, PR into another base). Pull requests
+/// from forks that happen to use the same branch name are ignored.
+fn find_prs(git: &Git, s: &Snapshot) -> Result<(Option<ExistingPr>, Option<(ExistingPr, String)>), String> {
     let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the remote URL")?;
-    let owner = s.repo.owner.clone().unwrap_or_default();
     let mut log = String::new();
     let mut list = gh(git);
     list.args([
-        "pr", "list", "-R", &repo, "--head", &s.head.name, "--state", "open", "--limit", "30", "--json",
-        "number,url,isDraft,isCrossRepository,headRepositoryOwner,baseRefName",
+        "pr", "list", "-R", &repo, "--head", &s.head.name, "--state", "open", "--limit", "100", "--json",
+        "number,url,isDraft,isCrossRepository,baseRefName",
     ]);
     let out = run(list, &mut log, None, GH_TIMEOUT)?;
     let v: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
-    let found = v.as_array().into_iter().flatten().find(|p| {
-        let same_repo = !p.get("isCrossRepository").and_then(|b| b.as_bool()).unwrap_or(true)
-            && p.pointer("/headRepositoryOwner/login")
-                .and_then(|l| l.as_str())
-                .map(|l| l.eq_ignore_ascii_case(&owner))
-                .unwrap_or(false);
-        let same_base = p.get("baseRefName").and_then(|b| b.as_str()) == Some(s.base.name.as_str());
-        same_repo && same_base
-    });
-    Ok(found.map(|p| ExistingPr {
+    let mine: Vec<&serde_json::Value> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p.get("isCrossRepository").and_then(|b| b.as_bool()) == Some(false))
+        .collect();
+    let to_pr = |p: &serde_json::Value| ExistingPr {
         number: p.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
         url: p.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string(),
         state: if p.get("isDraft").and_then(|d| d.as_bool()).unwrap_or(false) { "DRAFT".into() } else { "OPEN".into() },
-    }))
+    };
+    let base_of = |p: &serde_json::Value| p.get("baseRefName").and_then(|b| b.as_str()).unwrap_or_default().to_string();
+    let same = mine.iter().find(|p| base_of(p) == s.base.name).map(|p| to_pr(p));
+    let other = mine.iter().find(|p| base_of(p) != s.base.name).map(|p| (to_pr(p), base_of(p)));
+    Ok((same, other))
+}
+
+/// The open pull request from this branch into the previewed base, if any.
+pub fn find_pr(git: &Git, s: &Snapshot) -> Result<Option<ExistingPr>, String> {
+    let (same, other) = find_prs(git, s)?;
+    if same.is_none() {
+        if let Some((pr, base)) = other {
+            return Err(format!(
+                "pull request #{} from this branch targets `{base}`, not `{}`. Reopen with `prv --base {base}` to update it.",
+                pr.number, s.base.name
+            ));
+        }
+    }
+    Ok(same)
 }
 
 pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishRequest) -> Result<PublishResult, String> {
@@ -110,11 +124,15 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
         format!("The GitHub CLI (`gh`) must be installed and logged in to {host} (`gh auth login --hostname {host}`).\n\n{e}")
     })?;
 
-    let existing = find_pr(git, s).unwrap_or(None);
+    let existing = find_pr(git, s)?;
 
+    // Push exactly the reviewed commit, even if the branch moved meanwhile.
     let mut push = git.cmd();
-    push.args(["push", "--set-upstream", remote, &format!("{branch}:refs/heads/{branch}")]);
+    push.args(["push", remote, &format!("{}:refs/heads/{branch}", s.head.sha)]);
     run(push, &mut log, None, PUSH_TIMEOUT)?;
+    let mut upstream = git.cmd();
+    upstream.args(["branch", &format!("--set-upstream-to={remote}/{branch}"), branch]);
+    let _ = run(upstream, &mut log, None, GH_TIMEOUT);
 
     if let Some(pr) = existing {
         let draft = pr.state == "DRAFT";

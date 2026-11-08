@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+/// The empty tree id for this repository's hash algorithm (SHA-1 or SHA-256).
+pub fn empty_tree(git: &Git) -> String {
+    git.line(&["hash-object", "-t", "tree", "--stdin"])
+        .unwrap_or_else(|| "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into())
+}
 const MAX_PATCH_BYTES: usize = 3 * 1024 * 1024;
 const MAX_BLOB_BYTES: usize = 5 * 1024 * 1024;
 
@@ -589,7 +593,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     let ends = if let Some(from) = range.from.as_deref() {
         let a = git
             .line(&["rev-parse", "--verify", "-q", &format!("{from}^")])
-            .unwrap_or_else(|| EMPTY_TREE.to_string());
+            .unwrap_or_else(|| empty_tree(git));
         DiffEnds { a, b: range.to.clone().unwrap_or_else(|| from.to_string()) }
     } else if opts.uncommitted {
         mode = "worktree";

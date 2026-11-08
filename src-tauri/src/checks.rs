@@ -124,6 +124,7 @@ pub fn run(
     root: &Path,
     env: &[(String, String)],
     cancel: &AtomicBool,
+    tail: Option<usize>,
     mut on_output: impl FnMut(&str),
 ) -> Option<i32> {
     let child = match spawn(def, root, env) {
@@ -134,5 +135,5 @@ pub fn run(
         }
     };
     let timeout = Duration::from_secs(def.timeout.unwrap_or(DEFAULT_TIMEOUT));
-    crate::proc::stream(child, timeout, cancel, on_output)
+    crate::proc::stream(child, timeout, cancel, tail, on_output)
 }

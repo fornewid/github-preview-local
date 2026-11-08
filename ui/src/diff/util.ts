@@ -147,59 +147,116 @@ function splitTopLevel(s: string) {
   return parts
 }
 
-function globToRe(glob: string): string {
-  let re = ''
+const MAX_ALTERNATIVES = 64
+
+/** Expands `{a,b}` and makes `/**\/` also match a single `/`. False when too many alternatives. */
+function expand(glob: string, out: string[]): boolean {
+  if (out.length > MAX_ALTERNATIVES) return false
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === '\\') {
+      i++
+      continue
+    }
+    if (glob[i] === '{') {
+      const end = closingBrace(glob, i)
+      if (end < 0) continue
+      const pre = glob.slice(0, i)
+      const post = glob.slice(end + 1)
+      const alts = splitTopLevel(glob.slice(i + 1, end))
+      if (alts.length < 2) return expand(pre + '\\{' + glob.slice(i + 1, end) + '\\}' + post, out)
+      for (const a of alts) if (!expand(pre + a + post, out)) return false
+      return true
+    }
+  }
+  const gs = glob.indexOf('/**/')
+  if (gs >= 0) return expand(glob.slice(0, gs) + '/' + glob.slice(gs + 4), out) && expand(glob.slice(0, gs) + '/\u0000' + glob.slice(gs + 4), out)
+  out.push(glob.replace('\u0000', '**/'))
+  return out.length <= MAX_ALTERNATIVES
+}
+
+type Tok =
+  | { t: 'lit'; c: string }
+  | { t: 'any' }
+  | { t: 'star' }
+  | { t: 'globstar' }
+  | { t: 'class'; body: string; neg: boolean }
+
+function tokenize(glob: string): Tok[] {
+  const toks: Tok[] = []
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i]
-    if (c === '\\') {
-      re += escapeRe(glob[i + 1] ?? '\\')
-      i++
-    } else if (c === '*') {
+    if (c === '\\') toks.push({ t: 'lit', c: glob[++i] ?? '\\' })
+    else if (c === '*') {
       if (glob[i + 1] === '*') {
-        re += '.*'
-        i++
-      } else re += '[^/]*'
-    } else if (c === '?') re += '[^/]'
-    else if (c === '{') {
-      const end = closingBrace(glob, i)
-      if (end < 0) {
-        re += '\\{'
-        continue
+        while (glob[i + 1] === '*') i++
+        toks.push({ t: 'globstar' })
+      } else toks.push({ t: 'star' })
+    } else if (c === '?') toks.push({ t: 'any' })
+    else if (c === '[') {
+      const end = glob.indexOf(']', i + 2)
+      if (end < 0) toks.push({ t: 'lit', c })
+      else {
+        let body = glob.slice(i + 1, end)
+        const neg = body[0] === '!' || body[0] === '^'
+        if (neg) body = body.slice(1)
+        toks.push({ t: 'class', body, neg })
+        i = end
       }
-      re += '(?:' + splitTopLevel(glob.slice(i + 1, end)).map(globToRe).join('|') + ')'
-      i = end
-    } else if (c === '[') {
-      const end = glob.indexOf(']', i + 1)
-      if (end < 0) {
-        re += '\\['
-        continue
-      }
-      let body = glob.slice(i + 1, end)
-      const negate = body.startsWith('!')
-      if (negate) body = body.slice(1)
-      re += '[' + (negate ? '^' : '') + body.replace(/[\\\]^[]/g, '\\$&') + ']'
-      i = end
-    } else re += escapeRe(c)
+    } else toks.push({ t: 'lit', c })
   }
-  return re
+  return toks
+}
+
+function inClass(ch: string, body: string) {
+  for (let k = 0; k < body.length; k++) {
+    if (body[k + 1] === '-' && k + 2 < body.length) {
+      if (ch >= body[k] && ch <= body[k + 2]) return true
+      k += 2
+    } else if (body[k] === ch) return true
+  }
+  return false
+}
+
+/** Linear-time (tokens × text) wildcard match: no regex backtracking. */
+function matchTokens(toks: Tok[], text: string) {
+  const n = text.length
+  let next = new Array<boolean>(n + 1).fill(false)
+  next[n] = true
+  for (let i = toks.length - 1; i >= 0; i--) {
+    const tok = toks[i]
+    const cur = new Array<boolean>(n + 1).fill(false)
+    for (let j = n; j >= 0; j--) {
+      const ch = j < n ? text[j] : ''
+      switch (tok.t) {
+        case 'lit':
+          cur[j] = j < n && ch === tok.c && next[j + 1]
+          break
+        case 'any':
+          cur[j] = j < n && ch !== '/' && next[j + 1]
+          break
+        case 'class':
+          cur[j] = j < n && ch !== '/' && inClass(ch, tok.body) !== tok.neg && next[j + 1]
+          break
+        case 'star':
+          cur[j] = next[j] || (j < n && ch !== '/' && cur[j + 1])
+          break
+        case 'globstar':
+          cur[j] = next[j] || (j < n && cur[j + 1])
+          break
+      }
+    }
+    next = cur
+  }
+  return next[0]
 }
 
 function globMatch(glob: string, path: string) {
-  // Pathological patterns (catastrophic backtracking) are ignored.
-  if (glob.length > 200 || (glob.match(/\*/g)?.length ?? 0) > 16) return false
-  glob = glob.replace(/\*{3,}/g, '**')
-  const base = path.split('/').pop() ?? path
+  if (glob.length > 500) return false
   // EditorConfig: a glob containing `/` is relative to the .editorconfig directory (the repository root).
   const anchored = glob.includes('/')
-  const target = anchored ? '/' + path : base
+  const target = anchored ? '/' + path : (path.split('/').pop() ?? path)
   const pattern = anchored && !glob.startsWith('/') ? '/' + glob : glob
-  try {
-    return new RegExp(`^${globToRe(pattern)}$`).test(target)
-  } catch {
-    return false
-  }
-}
-
-function escapeRe(s: string) {
-  return s.replace(/[.+^${}()|[\]\\*?]/g, '\\$&')
+  const alts: string[] = []
+  if (!expand(pattern, alts)) return false
+  return alts.some((a) => matchTokens(tokenize(a), target))
 }
