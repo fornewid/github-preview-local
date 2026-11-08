@@ -130,9 +130,12 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
     let mut push = git.cmd();
     push.args(["push", remote, &format!("{}:refs/heads/{branch}", s.head.sha)]);
     run(push, &mut log, None, PUSH_TIMEOUT)?;
-    let mut upstream = git.cmd();
-    upstream.args(["branch", &format!("--set-upstream-to={remote}/{branch}"), branch]);
-    let _ = run(upstream, &mut log, None, GH_TIMEOUT);
+    // What `push -u` would do; works without a remote-tracking ref (single-branch / shallow clones).
+    for (key, value) in [("remote", remote.to_string()), ("merge", format!("refs/heads/{branch}"))] {
+        let mut cfg = git.cmd();
+        cfg.args(["config", &format!("branch.{branch}.{key}"), &value]);
+        let _ = run(cfg, &mut log, None, GH_TIMEOUT);
+    }
 
     if let Some(pr) = existing {
         let draft = pr.state == "DRAFT";

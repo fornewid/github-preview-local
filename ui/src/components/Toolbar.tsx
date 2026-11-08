@@ -471,9 +471,12 @@ function ReviewMenu() {
               <div className="confirm-panel">
                 {existing?.loading && <div className="color-fg-muted" style={{ marginBottom: 8 }}>Checking for an open pull request…</div>}
                 {existing?.error && (
-                  <div className="flash flash-warn">
+                  <div className="flash flash-error">
                     <AlertIcon size={16} />
-                    <span style={{ whiteSpace: 'pre-wrap' }}>Could not look up pull requests with `gh`: {existing.error.split('\n')[0]}</span>
+                    <span style={{ whiteSpace: 'pre-wrap', flex: 'auto' }}>Publishing is blocked: {existing.error.split('\n')[0]}</span>
+                    <button type="button" className="btn btn-sm" onClick={() => void findPr()}>
+                      Retry
+                    </button>
                   </div>
                 )}
                 {pr && (
@@ -519,7 +522,12 @@ function ReviewMenu() {
             </label>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button type="button" className="btn btn-sm btn-primary" disabled={!!busy} onClick={doSubmit}>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={!!busy || (event === 'CONFIRM' && (!!existing?.loading || !!existing?.error))}
+              onClick={doSubmit}
+            >
               {busy ? busy : event === 'CONFIRM' ? (pr ? 'Confirm and push' : 'Confirm and create pull request') : 'Submit review'}
             </button>
             <span className="color-fg-muted" style={{ fontSize: 12 }}>

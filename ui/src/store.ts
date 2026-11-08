@@ -345,7 +345,8 @@ export const useStore = create<Store>((set, get) => ({
 
   async findPr() {
     const t = get().transport
-    if (!t?.capabilities.publish || get().existingPr) return
+    const cur = get().existingPr
+    if (!t?.capabilities.publish || cur?.loading || (cur && !cur.error)) return
     set({ existingPr: { loading: true, pr: null, error: null } })
     try {
       set({ existingPr: { loading: false, pr: await t.findPr(), error: null } })

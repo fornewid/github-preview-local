@@ -49,26 +49,44 @@ pub fn kill_group(pid: u32) {
 
 /// Kills a process and all its descendants without relying on process groups
 /// (used for git/gh, which must stay in the terminal's group for prompts).
+/// Each process is frozen (SIGSTOP) before its children are listed, so
+/// nothing can fork new descendants while the tree is collected.
 pub fn kill_descendants(child: &mut Child) {
     #[cfg(unix)]
     {
-        fn collect(pid: u32, out: &mut Vec<u32>) {
-            if let Ok(o) = Command::new("pgrep").args(["-P", &pid.to_string()]).stderr(Stdio::null()).output() {
-                for line in String::from_utf8_lossy(&o.stdout).lines() {
-                    if let Ok(c) = line.trim().parse::<u32>() {
-                        if !out.contains(&c) {
-                            out.push(c);
-                            collect(c, out);
-                        }
-                    }
+        fn children(pid: u32) -> Vec<u32> {
+            Command::new("pgrep")
+                .args(["-P", &pid.to_string()])
+                .stderr(Stdio::null())
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect())
+                .unwrap_or_default()
+        }
+        let mut all: Vec<u32> = vec![];
+        let mut stack = vec![child.id()];
+        // SIGSTOP is asynchronous: a process may finish one last fork before it
+        // stops, so frozen parents are re-scanned until the tree is stable.
+        for _ in 0..8 {
+            let before = all.len();
+            while let Some(pid) = stack.pop() {
+                if all.contains(&pid) {
+                    continue;
                 }
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGSTOP);
+                }
+                all.push(pid);
+                stack.extend(children(pid));
+            }
+            std::thread::sleep(Duration::from_millis(15));
+            stack = all.iter().flat_map(|&p| children(p)).filter(|c| !all.contains(c)).collect();
+            if stack.is_empty() && all.len() == before {
+                break;
             }
         }
-        let mut pids = vec![];
-        collect(child.id(), &mut pids);
-        for p in pids {
+        for pid in all {
             unsafe {
-                libc::kill(p as libc::pid_t, libc::SIGKILL);
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
             }
         }
     }
@@ -297,6 +315,18 @@ pub fn on_terminate(f: impl Fn() + Send + 'static) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_kills_a_forking_tree() {
+        // A parent that keeps forking workers: none may survive the timeout.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "while true; do sleep 300 & sleep 0.01; done"]);
+        let out = run(cmd, None, Duration::from_millis(800)).unwrap();
+        assert!(out.timed_out);
+        std::thread::sleep(Duration::from_millis(300));
+        let left = Command::new("pgrep").args(["-fl", "^sleep 300"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&left.stdout).trim().is_empty(), "survivors: {}", String::from_utf8_lossy(&left.stdout));
+    }
 
     #[test]
     fn timeout_with_grandchild_holding_pipes() {

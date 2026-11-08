@@ -170,7 +170,7 @@ function expand(glob: string, out: string[]): boolean {
   }
   const gs = glob.indexOf('/**/')
   if (gs >= 0) return expand(glob.slice(0, gs) + '/' + glob.slice(gs + 4), out) && expand(glob.slice(0, gs) + '/\u0000' + glob.slice(gs + 4), out)
-  out.push(glob.replace('\u0000', '**/'))
+  out.push(glob.replaceAll('\u0000', '**/'))
   return out.length <= MAX_ALTERNATIVES
 }
 
