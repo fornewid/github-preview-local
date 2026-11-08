@@ -92,8 +92,10 @@ export interface ReviewComment {
   createdAt: string
   /** Lines the comment refers to, prefixed with ` `, `+` or `-`. */
   snippet: string[]
-  /** Head commit at the time of commenting. */
+  /** Commit the comment was made against (HEAD, or the last commit of a range). */
   commit: string
+  /** Commit range the comment was made in (`from..to`); empty for "all changes". */
+  view?: string | null
 }
 
 export interface PersistedState {

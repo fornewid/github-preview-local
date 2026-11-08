@@ -388,6 +388,8 @@ function ReviewMenu() {
   const setPr = useStore((st) => st.setPr)
   const submit = useStore((st) => st.submit)
   const busy = useStore((st) => st.busy)
+  const existing = useStore((st) => st.existingPr)
+  const findPr = useStore((st) => st.findPr)
   const [event, setEvent] = useState<ReviewEvent>('COMMENT')
   const [body, setBody] = useState('')
   const [draft, setDraft] = useState(false)
@@ -395,7 +397,7 @@ function ReviewMenu() {
   const canPublish = transport.capabilities.publish
   const failed = checks.filter((c) => c.status === 'failure')
   const notRun = checks.filter((c) => c.status === 'idle')
-  const pr = s.existingPr
+  const pr = existing?.pr ?? s.existingPr
 
   const doSubmit = async () => {
     setError(null)
@@ -449,7 +451,10 @@ function ReviewMenu() {
                 name="event"
                 disabled={!canPublish}
                 checked={event === 'CONFIRM'}
-                onChange={() => setEvent('CONFIRM')}
+                onChange={() => {
+                  setEvent('CONFIRM')
+                  void findPr()
+                }}
               />
               <span>
                 <span className="label">Confirm</span>
@@ -464,6 +469,19 @@ function ReviewMenu() {
             </label>
             {event === 'CONFIRM' && (
               <div className="confirm-panel">
+                {existing?.loading && <div className="color-fg-muted" style={{ marginBottom: 8 }}>Checking for an open pull request…</div>}
+                {existing?.error && (
+                  <div className="flash flash-warn">
+                    <AlertIcon size={16} />
+                    <span style={{ whiteSpace: 'pre-wrap' }}>Could not look up pull requests with `gh`: {existing.error.split('\n')[0]}</span>
+                  </div>
+                )}
+                {pr && (
+                  <div className="flash">
+                    Pull request #{pr.number} is already open for this branch. Confirm pushes the new commits to it; its title and
+                    description stay unchanged.
+                  </div>
+                )}
                 {s.dirty && (
                   <div className="flash flash-warn">
                     <AlertIcon size={16} /> You have uncommitted changes. Only committed changes are pushed.

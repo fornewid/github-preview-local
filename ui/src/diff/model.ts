@@ -19,6 +19,8 @@ export interface Gap {
   newStart: number
   /** Number of hidden lines; -1 when unknown (file contents not loaded). */
   size: number
+  /** File contents are available, so the gap can actually be revealed. */
+  loaded: boolean
 }
 
 export interface HunkRow {
@@ -50,15 +52,15 @@ export interface SplitRow {
 export type UnifiedRow = HunkRow | LineRow
 export type SplitViewRow = HunkRow | SplitRow
 
-export function computeGaps(hunks: Hunk[], newTotal: number | null): Gap[] {
+export function computeGaps(hunks: Hunk[], newTotal: number | null, loaded: boolean): Gap[] {
   const gaps: Gap[] = []
   if (!hunks.length) return gaps
   const first = hunks[0]
-  gaps.push({ index: 0, oldStart: 1, newStart: 1, size: Math.max(0, Math.min(first.oldStart, first.newStart) - 1) })
+  gaps.push({ index: 0, oldStart: 1, newStart: 1, size: Math.max(0, Math.min(first.oldStart, first.newStart) - 1), loaded })
   for (let i = 1; i < hunks.length; i++) {
     const p = hunks[i - 1]
     const newStart = p.newStart + p.newLines
-    gaps.push({ index: i, oldStart: p.oldStart + p.oldLines, newStart, size: Math.max(0, hunks[i].newStart - newStart) })
+    gaps.push({ index: i, oldStart: p.oldStart + p.oldLines, newStart, size: Math.max(0, hunks[i].newStart - newStart), loaded })
   }
   const last = hunks[hunks.length - 1]
   const tailNew = last.newStart + last.newLines
@@ -68,6 +70,7 @@ export function computeGaps(hunks: Hunk[], newTotal: number | null): Gap[] {
     oldStart: tailOld,
     newStart: tailNew,
     size: newTotal == null || last.newLines === 0 ? -1 : Math.max(0, newTotal - tailNew + 1),
+    loaded,
   })
   return gaps
 }
@@ -79,7 +82,7 @@ function remaining(g: Gap, s: GapState | undefined) {
 
 export function expandersFor(g: Gap, gapsLen: number, s: GapState | undefined): Expander[] {
   const r = remaining(g, s)
-  if (r <= 0) return []
+  if (r <= 0 || !g.loaded) return []
   if (g.index === 0) return ['up']
   if (g.index === gapsLen - 1) return ['down']
   return r <= EXPAND_STEP ? ['all'] : ['down', 'up']
@@ -95,7 +98,7 @@ export function applyExpander(g: Gap, s: GapState | undefined, e: Expander): Gap
 
 export function expandAll(gaps: Gap[]): Record<number, GapState> {
   const out: Record<number, GapState> = {}
-  for (const g of gaps) if (g.size > 0) out[g.index] = { top: g.size, bottom: 0 }
+  for (const g of gaps) if (g.size > 0 && g.loaded) out[g.index] = { top: g.size, bottom: 0 }
   return out
 }
 

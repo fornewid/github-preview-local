@@ -3,11 +3,10 @@
 
 use crate::model::CheckDef;
 use serde::Deserialize;
-use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 #[derive(Deserialize)]
 struct Config {
@@ -95,6 +94,9 @@ fn auto_detect(root: &Path) -> Vec<CheckDef> {
     out
 }
 
+/// Default timeout for checks without an explicit `timeout` (30 minutes).
+pub const DEFAULT_TIMEOUT: u64 = 30 * 60;
+
 pub fn spawn(def: &CheckDef, root: &Path, env: &[(String, String)]) -> std::io::Result<Child> {
     let mut c = if cfg!(windows) {
         let mut c = Command::new("cmd");
@@ -111,61 +113,26 @@ pub fn spawn(def: &CheckDef, root: &Path, env: &[(String, String)]) -> std::io::
         .env("FORCE_COLOR", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    crate::proc::own_group(&mut c);
+    c.spawn()
 }
 
-/// Runs a check, streaming output chunks; returns the exit code (None on timeout/kill).
-pub fn run(def: &CheckDef, root: &Path, env: &[(String, String)], mut on_chunk: impl FnMut(&str)) -> Option<i32> {
-    let mut child = match spawn(def, root, env) {
+/// Runs a check, streaming output; returns the exit code (None on timeout/cancel).
+pub fn run(
+    def: &CheckDef,
+    root: &Path,
+    env: &[(String, String)],
+    cancel: &AtomicBool,
+    mut on_chunk: impl FnMut(&str),
+) -> Option<i32> {
+    let child = match spawn(def, root, env) {
         Ok(c) => c,
         Err(e) => {
             on_chunk(&format!("failed to start: {e}\n"));
             return Some(127);
         }
     };
-    let (tx, rx) = mpsc::channel::<String>();
-    let mut readers = vec![];
-    for pipe in [child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>), child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)]
-        .into_iter()
-        .flatten()
-    {
-        let tx = tx.clone();
-        readers.push(std::thread::spawn(move || {
-            let mut pipe = pipe;
-            let mut buf = [0u8; 8192];
-            loop {
-                match pipe.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
-                    }
-                }
-            }
-        }));
-    }
-    drop(tx);
-    let start = Instant::now();
-    let timeout = def.timeout.map(Duration::from_secs);
-    loop {
-        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
-            on_chunk(&chunk);
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            for r in readers {
-                let _ = r.join();
-            }
-            while let Ok(chunk) = rx.try_recv() {
-                on_chunk(&chunk);
-            }
-            return status.code().or(Some(1));
-        }
-        if let Some(t) = timeout {
-            if start.elapsed() > t {
-                let _ = child.kill();
-                on_chunk(&format!("\nTimed out after {}s\n", t.as_secs()));
-                return None;
-            }
-        }
-    }
+    let timeout = Duration::from_secs(def.timeout.unwrap_or(DEFAULT_TIMEOUT));
+    crate::proc::stream(child, timeout, cancel, on_chunk)
 }

@@ -67,13 +67,17 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
     r.comments.forEach((c, i) => {
       const lines = c.startLine && c.startLine !== c.line ? `lines ${c.startLine}-${c.line}` : `line ${c.line}`
       const side = c.side === 'LEFT' ? 'old/deleted side' : 'new side'
-      out.push('', `### ${i + 1}. \`${c.path}\` ${lines} (${side})`)
+      const at = c.view ? ` in commit range ${c.view}` : c.commit !== r.head.sha ? ` at commit ${c.commit.slice(0, 7)}` : ''
+      out.push('', `### ${i + 1}. \`${c.path}\` ${lines} (${side})${at}`)
       if (c.snippet.length) {
         const lang = FENCE_LANG[extOf(c.path)] ?? ''
         const allSame = c.snippet.every((l) => l[0] === ' ')
-        out.push(allSame ? '```' + lang : '```diff')
+        // The fence must be longer than any backtick run inside the snippet.
+        const longest = Math.max(0, ...c.snippet.flatMap((l) => (l.match(/`+/g) ?? []).map((m) => m.length)))
+        const fence = '`'.repeat(Math.max(3, longest + 1))
+        out.push(fence + (allSame ? lang : 'diff'))
         for (const l of c.snippet) out.push(allSame ? l.slice(1) : l)
-        out.push('```')
+        out.push(fence)
       }
       out.push('', c.body.trim())
     })

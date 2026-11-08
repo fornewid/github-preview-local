@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { Component, useMemo, type ReactNode } from 'react'
 import { useStore } from './store'
 import { AppHeader, PrHeader, TabNav } from './components/Header'
 import { FilesToolbar } from './components/Toolbar'
@@ -7,6 +7,28 @@ import { FileList } from './components/FileView'
 import { ChecksTab, CommitsTab, ConversationTab } from './components/Tabs'
 import { copyText } from './components/common'
 import { extOf, viewedKey } from './diff/util'
+
+/** Keeps a rendering error in one part of the page from blanking the window. */
+export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="flash flash-error" style={{ margin: 16 }}>
+        <div>
+          <strong>Something went wrong while rendering this view.</strong>
+          <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0' }}>{String(this.state.error.stack ?? this.state.error)}</pre>
+          <button type="button" className="btn btn-sm" onClick={() => this.setState({ error: null })}>
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
+}
 
 export function App() {
   const loading = useStore((st) => st.loading)
@@ -32,10 +54,12 @@ export function App() {
             {snapshot.warnings.join(' ')}
           </div>
         )}
-        {tab === 'files' && <FilesTab />}
-        {tab === 'commits' && <CommitsTab />}
-        {tab === 'checks' && <ChecksTab />}
-        {tab === 'conversation' && <ConversationTab />}
+        <ErrorBoundary key={tab}>
+          {tab === 'files' && <FilesTab />}
+          {tab === 'commits' && <CommitsTab />}
+          {tab === 'checks' && <ChecksTab />}
+          {tab === 'conversation' && <ConversationTab />}
+        </ErrorBoundary>
       </div>
       <SubmittedDialog />
     </>

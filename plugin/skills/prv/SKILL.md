@@ -57,4 +57,7 @@ Without a config, `package.json` scripts (lint, typecheck, test), `./gradlew che
 Makefile targets and pre-commit are detected. Check commands receive `PRV_BASE`, `PRV_HEAD`,
 `PRV_MERGE_BASE` and `PRV_CHANGED_FILES` (newline-separated) in their environment.
 
+Checks execute commands defined by the repository. Only run `prv checks` when the user asks for it or
+the repository is trusted (e.g. the user's own project), never on an unfamiliar clone.
+
 If the machine has no display (SSH, containers), use `prv export` and give the user the file path.

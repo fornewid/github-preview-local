@@ -4,6 +4,7 @@
 import type {
   CheckDef,
   CheckStatus,
+  ExistingPr,
   PersistedState,
   PublishRequest,
   PublishResult,
@@ -30,6 +31,8 @@ export interface Transport {
   saveState(snapshot: Snapshot, state: PersistedState): Promise<void>
   listChecks(): Promise<CheckDef[]>
   runCheck(name: string): Promise<void>
+  cancelCheck(name: string): Promise<void>
+  findPr(): Promise<ExistingPr | null>
   onCheckEvent(cb: (e: { name: string; status?: CheckStatus; chunk?: string; exitCode?: number | null }) => void): () => void
   publish(req: PublishRequest): Promise<PublishResult>
   submit(result: ReviewResult, markdown: string): Promise<void>
@@ -63,6 +66,8 @@ function createNative(): Transport {
     saveState: (_s, state) => invoke<void>('save_state', { state }),
     listChecks: () => invoke<CheckDef[]>('list_checks'),
     runCheck: (name) => invoke<void>('run_check', { name }),
+    cancelCheck: (name) => invoke<void>('cancel_check', { name }),
+    findPr: async () => (await invoke<ExistingPr | null>('find_pr')) ?? null,
     onCheckEvent: (cb) => {
       let un: (() => void) | undefined
       let cancelled = false
@@ -106,6 +111,8 @@ function createStatic(data: StaticData): Transport {
     },
     listChecks: async () => [],
     runCheck: async () => {},
+    cancelCheck: async () => {},
+    findPr: async () => null,
     onCheckEvent: () => () => {},
     publish: async () => {
       throw new Error('Publishing is not available in a static export. Run `prv` to open the native window.')

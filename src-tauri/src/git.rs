@@ -4,10 +4,10 @@
 
 use crate::model::*;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_PATCH_BYTES: usize = 3 * 1024 * 1024;
@@ -84,35 +84,15 @@ impl Git {
             .unwrap_or(false)
     }
 
-    /// Runs git with a timeout; returns combined stderr on failure.
+    /// Runs git with a timeout; returns stderr on failure.
     pub fn run_timeout(&self, args: &[&str], timeout: Duration) -> Result<String, String> {
-        let mut child = self
-            .cmd()
-            .args(args)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        let start = Instant::now();
-        loop {
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                let mut out = String::new();
-                let mut err = String::new();
-                if let Some(mut o) = child.stdout.take() {
-                    let _ = o.read_to_string(&mut out);
-                }
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_string(&mut err);
-                }
-                return if status.success() { Ok(out) } else { Err(err.trim().to_string()) };
-            }
-            if start.elapsed() > timeout {
-                let _ = child.kill();
-                return Err(format!("timed out after {}s", timeout.as_secs()));
-            }
-            std::thread::sleep(Duration::from_millis(50));
+        let mut cmd = self.cmd();
+        cmd.args(args).env("GIT_TERMINAL_PROMPT", "0");
+        let out = crate::proc::run(cmd, None, timeout).map_err(|e| e.to_string())?;
+        if out.timed_out {
+            return Err(format!("timed out after {}s", timeout.as_secs()));
         }
+        if out.success() { Ok(out.stdout) } else { Err(out.stderr.trim().to_string()) }
     }
 
     pub fn git_path(&self, name: &str) -> PathBuf {
@@ -208,10 +188,12 @@ fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(S
 /// built in a temporary index so the user's staging area is untouched.
 fn worktree_tree(git: &Git) -> Result<String, String> {
     let index = git.git_path("index");
-    let tmp = git.git_path("prv-index.tmp");
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let tmp = git.git_path(&format!("prv-index-{}-{nanos}.tmp", std::process::id()));
     if let Some(dir) = tmp.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    let _ = std::fs::remove_file(&tmp);
     if index.exists() {
         std::fs::copy(&index, &tmp).map_err(|e| e.to_string())?;
     }
@@ -322,25 +304,59 @@ fn hunks_of(chunk: &str) -> &str {
     }
 }
 
-fn matches_header(header: &str, e: &RawEntry) -> bool {
-    let old = e.old_path.as_deref().unwrap_or(&e.path);
-    header == format!("diff --git a/{} b/{}", old, e.path) || (header.contains(&e.path) && header.contains(old))
+/// Git's `quote_c_style` (with core.quotepath=false): quote only when needed.
+fn quote_path(prefix: &str, p: &str) -> String {
+    let needs = p.chars().any(|c| c == '"' || c == '\\' || (c as u32) < 0x20 || c as u32 == 0x7f);
+    if !needs {
+        return format!("{prefix}{p}");
+    }
+    let mut s = String::from("\"");
+    s.push_str(prefix);
+    for c in p.chars() {
+        match c {
+            '"' => s.push_str("\\\""),
+            '\\' => s.push_str("\\\\"),
+            '\x07' => s.push_str("\\a"),
+            '\x08' => s.push_str("\\b"),
+            '\t' => s.push_str("\\t"),
+            '\n' => s.push_str("\\n"),
+            '\x0b' => s.push_str("\\v"),
+            '\x0c' => s.push_str("\\f"),
+            '\r' => s.push_str("\\r"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => s.push_str(&format!("\\{:03o}", c as u32)),
+            c => s.push(c),
+        }
+    }
+    s.push('"');
+    s
 }
 
-/// Assigns patch chunks to raw entries (both are in the same order; with
-/// `--ignore-all-space` some chunks may be missing).
-fn assign(entries: &[RawEntry], chunks: Vec<(String, String)>) -> Vec<Option<String>> {
-    let mut out = vec![None; entries.len()];
-    let mut ci = 0;
-    for (i, e) in entries.iter().enumerate() {
-        let mut j = ci;
-        while j < chunks.len() && j < ci + 8 {
-            if matches_header(&chunks[j].0, e) {
-                out[i] = Some(chunks[j].1.clone());
-                ci = j + 1;
-                break;
+fn expected_header(e: &RawEntry) -> String {
+    let old = e.old_path.as_deref().unwrap_or(&e.path);
+    format!("diff --git {} {}", quote_path("a/", old), quote_path("b/", &e.path))
+}
+
+/// Assigns patch chunks to raw entries. Chunks are an ordered subset of the
+/// entries (`--ignore-all-space` drops whitespace-only files; a typechange
+/// yields two chunks for one entry), so headers are matched exactly while
+/// scanning forward. Returns (full chunk text, hunks text) per entry.
+fn assign(entries: &[RawEntry], chunks: Vec<(String, String)>) -> Vec<(String, String)> {
+    let expected: Vec<String> = entries.iter().map(expected_header).collect();
+    let mut out = vec![(String::new(), String::new()); entries.len()];
+    let mut next = 0usize;
+    let mut last: Option<usize> = None;
+    for (header, chunk) in chunks {
+        if let Some(l) = last {
+            if expected[l] == header {
+                out[l].0.push_str(&chunk);
+                out[l].1.push_str(hunks_of(&chunk));
+                continue;
             }
-            j += 1;
+        }
+        if let Some(j) = (next..entries.len()).find(|&j| expected[j] == header) {
+            out[j] = (chunk.clone(), hunks_of(&chunk).to_string());
+            last = Some(j);
+            next = j + 1;
         }
     }
     out
@@ -395,7 +411,9 @@ fn generated_attrs(git: &Git, paths: &[String]) -> HashMap<String, Option<bool>>
     let Ok(mut child) = child else { return out };
     if let Some(mut stdin) = child.stdin.take() {
         let input = paths.join("\0") + "\0";
-        let _ = stdin.write_all(input.as_bytes());
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(input.as_bytes());
+        });
     }
     let Ok(res) = child.wait_with_output() else { return out };
     let text = String::from_utf8_lossy(&res.stdout);
@@ -423,7 +441,9 @@ fn humanize_branch(b: &str) -> String {
     }
 }
 
-fn pr_template(root: &Path) -> Option<String> {
+/// PR template from the base branch (like GitHub), read from git objects so
+/// symlinks in the working tree cannot point outside the repository.
+fn pr_template(git: &Git, base_sha: &str) -> Option<String> {
     for p in [
         ".github/pull_request_template.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
@@ -432,17 +452,40 @@ fn pr_template(root: &Path) -> Option<String> {
         "docs/pull_request_template.md",
         "docs/PULL_REQUEST_TEMPLATE.md",
     ] {
-        if let Ok(s) = std::fs::read_to_string(root.join(p)) {
+        if let Some(s) = blob_text(git, base_sha, p) {
             return Some(s);
         }
     }
-    let dir = root.join(".github/PULL_REQUEST_TEMPLATE");
-    let mut entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    entries
-        .into_iter()
-        .find(|p| p.extension().map(|e| e == "md").unwrap_or(false))
-        .and_then(|p| std::fs::read_to_string(p).ok())
+    let list = git.run(&["ls-tree", "--name-only", &format!("{base_sha}:.github/PULL_REQUEST_TEMPLATE")]).ok()?;
+    let mut names: Vec<&str> = list.lines().filter(|n| n.ends_with(".md")).collect();
+    names.sort();
+    names.first().and_then(|n| blob_text(git, base_sha, &format!(".github/PULL_REQUEST_TEMPLATE/{n}")))
+}
+
+/// A regular file (not a symlink) at `<treeish>:<path>`, as text.
+fn blob_text(git: &Git, treeish: &str, path: &str) -> Option<String> {
+    let entry = git.run(&["ls-tree", treeish, "--", path]).ok()?;
+    let mode = entry.split_whitespace().next()?;
+    if mode != "100644" && mode != "100755" {
+        return None;
+    }
+    let bytes = git.bytes(&["cat-file", "blob", &format!("{treeish}:{path}")]).ok()?;
+    if bytes.len() > 256 * 1024 {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Removes `user:password@` from https remote URLs.
+fn strip_userinfo(url: &str) -> String {
+    if let Some((scheme, rest)) = url.split_once("://") {
+        if let Some((auth, host)) = rest.split_once('@') {
+            if !auth.contains('/') && (scheme == "https" || scheme == "http") {
+                return format!("{scheme}://{host}");
+            }
+        }
+    }
+    url.to_string()
 }
 
 pub fn now_rfc3339() -> String {
@@ -472,7 +515,7 @@ pub struct Resolved {
 pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved, String> {
     let mut warnings = vec![];
     let remote = pick_remote(git);
-    let remote_url = remote.as_deref().and_then(|r| git.line(&["remote", "get-url", r]));
+    let remote_url = remote.as_deref().and_then(|r| git.line(&["remote", "get-url", r])).map(|u| strip_userinfo(&u));
     let (host, owner, name) = remote_url.as_deref().map(parse_remote).unwrap_or((None, None, None));
     let repo_name = name.unwrap_or_else(|| {
         git.root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "repository".into())
@@ -564,10 +607,11 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         .or_else(|| commits.last().map(|c| c.author.clone()))
         .unwrap_or_else(|| "you".into());
     let title = if commits.len() == 1 { commits[0].subject.clone() } else { humanize_branch(&head_name) };
-    let body = pr_template(&git.root)
+    let body = pr_template(git, &base_sha)
         .or_else(|| (commits.len() == 1).then(|| commits[0].body.clone()))
         .unwrap_or_default();
 
+    let editorconfig = blob_text(git, &head_sha, ".editorconfig");
     let snapshot = Snapshot {
         repo: RepoInfo {
             name: repo_name,
@@ -588,7 +632,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         mode: mode.into(),
         dirty,
         warnings,
-        editorconfig: std::fs::read_to_string(git.root.join(".editorconfig")).ok(),
+        editorconfig,
         existing_pr: None,
         generated_at: now_rfc3339(),
     };
@@ -597,7 +641,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
 
 fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
     let (a, b) = (ends.a.as_str(), ends.b.as_str());
-    let base = ["diff", "--no-color", "--no-ext-diff", "--find-renames"];
+    let base = ["diff", "--no-color", "--no-ext-diff", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/"];
     let raw = git.bytes(&[&base[..], &["--raw", "-z", "--no-abbrev", a, b]].concat())?;
     let entries = parse_raw(&raw);
     let num = parse_numstat(&git.bytes(&[&base[..], &["--numstat", "-z", a, b]].concat())?);
@@ -614,8 +658,8 @@ fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
     for (i, e) in entries.iter().enumerate() {
         let (add, del, bin) = num.get(&e.path).cloned().unwrap_or((0, 0, false));
         let (add_w, del_w, _) = num_w.get(&e.path).cloned().unwrap_or((0, 0, false));
-        let chunk = chunks[i].clone().unwrap_or_default();
-        let chunk_w = chunks_w[i].clone().unwrap_or_default();
+        let (chunk, hunks) = &chunks[i];
+        let (_, hunks_w) = &chunks_w[i];
         let binary = bin || chunk.contains("\nBinary files ") || chunk.contains("\nGIT binary patch");
         let too_large = chunk.len() > MAX_PATCH_BYTES;
         let status = match e.status {
@@ -644,8 +688,8 @@ fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
             new_mode: (!zero(&e.new_mode)).then(|| e.new_mode.clone()),
             old_sha: (!zero(&e.old_sha)).then(|| e.old_sha.clone()),
             new_sha: (!zero(&e.new_sha)).then(|| e.new_sha.clone()),
-            patch: if binary || too_large { String::new() } else { hunks_of(&chunk).to_string() },
-            patch_w: if binary || too_large { String::new() } else { hunks_of(&chunk_w).to_string() },
+            patch: if binary || too_large { String::new() } else { hunks.clone() },
+            patch_w: if binary || too_large { String::new() } else { hunks_w.clone() },
             additions_w: add_w,
             deletions_w: del_w,
             too_large,
@@ -658,9 +702,9 @@ fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
 pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side: &str) -> Option<String> {
     let f = files.iter().find(|f| {
         if side == "old" {
-            f.old_path.as_deref().unwrap_or(&f.path) == path
+            f.status != "added" && f.old_path.as_deref().unwrap_or(&f.path) == path
         } else {
-            f.path == path
+            f.status != "deleted" && f.path == path
         }
     })?;
     if f.binary || f.submodule {
@@ -678,6 +722,55 @@ pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side
         return None;
     }
     Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Reads many blobs with one `git cat-file --batch` process (used by `prv export`).
+/// Returns sha -> text for text blobs under the size limit.
+pub fn read_blobs(git: &Git, shas: &[String]) -> HashMap<String, String> {
+    use std::io::{BufRead, BufReader, Read as _};
+    let mut out = HashMap::new();
+    if shas.is_empty() {
+        return out;
+    }
+    let Ok(mut child) = git
+        .cmd()
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return out;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let input: String = shas.iter().map(|s| format!("{s}\n")).collect();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(input.as_bytes());
+        });
+    }
+    let Some(stdout) = child.stdout.take() else { return out };
+    let mut r = BufReader::new(stdout);
+    for _ in shas {
+        let mut header = String::new();
+        if r.read_line(&mut header).unwrap_or(0) == 0 {
+            break;
+        }
+        let f: Vec<&str> = header.split_whitespace().collect();
+        if f.len() < 3 {
+            continue; // "<sha> missing"
+        }
+        let size: usize = f[2].parse().unwrap_or(0);
+        let mut buf = vec![0u8; size + 1]; // content + trailing newline
+        if r.read_exact(&mut buf).is_err() {
+            break;
+        }
+        buf.pop();
+        if f[1] == "blob" && size <= MAX_BLOB_BYTES && !buf.iter().take(8000).any(|b| *b == 0) {
+            out.insert(f[0].to_string(), String::from_utf8_lossy(&buf).into_owned());
+        }
+    }
+    let _ = child.wait();
+    out
 }
 
 pub fn changed_paths(files: &[FileDiff]) -> String {
@@ -702,6 +795,33 @@ mod tests {
             parse_remote("ssh://git@ghe.example.com:2222/team/app"),
             (Some("ghe.example.com".into()), Some("team".into()), Some("app".into()))
         );
+    }
+
+    #[test]
+    fn quoting_and_assignment() {
+        let e = |p: &str, o: Option<&str>| RawEntry {
+            old_mode: "100644".into(),
+            new_mode: "100644".into(),
+            old_sha: "1".into(),
+            new_sha: "2".into(),
+            status: 'M',
+            path: p.into(),
+            old_path: o.map(Into::into),
+        };
+        assert_eq!(quote_path("a/", "dir with space/x.txt"), "a/dir with space/x.txt");
+        assert_eq!(quote_path("b/", "q\"uote.txt"), "\"b/q\\\"uote.txt\"");
+        // `-w` dropped a.txt: data.txt must not receive a.txt's (missing) chunk or vice versa.
+        let entries = vec![e("a.txt", None), e("data.txt", None)];
+        let chunks = vec![("diff --git a/data.txt b/data.txt".to_string(), "diff --git a/data.txt b/data.txt\n@@ -1 +1 @@\n-x\n+y\n".to_string())];
+        let out = assign(&entries, chunks);
+        assert_eq!(out[0].1, "");
+        assert!(out[1].1.starts_with("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn userinfo() {
+        assert_eq!(strip_userinfo("https://user:tok@ghe.example.com/a/b.git"), "https://ghe.example.com/a/b.git");
+        assert_eq!(strip_userinfo("git@ghe.example.com:a/b.git"), "git@ghe.example.com:a/b.git");
     }
 
     #[test]

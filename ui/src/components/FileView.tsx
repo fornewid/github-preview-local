@@ -13,7 +13,8 @@ import {
   UnfoldIcon,
   CheckIcon,
 } from '@primer/octicons-react'
-import { useStore, type CommentTarget } from '../store'
+import { useShallow } from 'zustand/react/shallow'
+import { useStore, viewKey, type CommentTarget } from '../store'
 import { parseHunks, splitLines, type DiffLine } from '../diff/parse'
 import {
   applyExpander,
@@ -94,10 +95,6 @@ const FileView = memo(function FileView({ file }: { file: FileDiff }) {
     return () => io.disconnect()
   }, [visible])
 
-  useEffect(() => {
-    if (visible && !collapsed) ensureContents(file)
-  }, [visible, collapsed, file, ensureContents])
-
   const patch = settings.hideWhitespace ? file.patchW : file.patch
   const add = settings.hideWhitespace ? file.additionsW : file.additions
   const del = settings.hideWhitespace ? file.deletionsW : file.deletions
@@ -105,13 +102,27 @@ const FileView = memo(function FileView({ file }: { file: FileDiff }) {
   const newLines = useMemo(() => (newText != null ? splitLines(newText) : null), [newText])
   const oldLines = useMemo(() => (oldText != null ? splitLines(oldText) : null), [oldText])
   const newTotal = file.status === 'deleted' ? 0 : newLines ? newLines.length : null
-  const gaps = useMemo(() => computeGaps(hunks, newTotal), [hunks, newTotal])
-  const gapState = ui?.gaps ?? {}
+  const loaded = file.status === 'deleted' ? oldLines != null : newLines != null
+  const gaps = useMemo(() => computeGaps(hunks, newTotal, loaded), [hunks, newTotal, loaded])
+  const ws = settings.hideWhitespace
+  const gapState = (ws ? ui?.gapsW : ui?.gaps) ?? {}
   const expandable = gaps.some((g) => g.size > 0)
   const anyExpanded = Object.values(gapState).some((g) => g.top + g.bottom > 0)
   const patchLines = useMemo(() => hunks.reduce((a, h) => a + h.lines.length, 0), [hunks])
   const tabSize = tabSizeFor(editorconfig, file.path)
   const modeChanged = file.oldMode && file.newMode && file.oldMode !== file.newMode && file.status !== 'added' && file.status !== 'deleted'
+  // Fetch contents only when the diff table is actually rendered.
+  const renders =
+    !collapsed &&
+    !file.submodule &&
+    !file.binary &&
+    !file.tooLarge &&
+    (!file.generated || forceLoad) &&
+    hunks.length > 0 &&
+    (patchLines <= LARGE_DIFF_LINES || forceLoad)
+  useEffect(() => {
+    if (visible && renders) ensureContents(file)
+  }, [visible, renders, file, ensureContents])
 
   let body: ReactNode = null
   if (collapsed) body = null
@@ -164,7 +175,7 @@ const FileView = memo(function FileView({ file }: { file: FileDiff }) {
         hlOld={hlOld}
         hlNew={hlNew}
         tabSize={tabSize}
-        onExpand={(g, e) => setGaps(file.path, { ...gapState, [g.index]: applyExpander(g, gapState[g.index], e) })}
+        onExpand={(g, e) => setGaps(file.path, { ...gapState, [g.index]: applyExpander(g, gapState[g.index], e) }, ws)}
       />
     )
 
@@ -181,13 +192,13 @@ const FileView = memo(function FileView({ file }: { file: FileDiff }) {
           >
             {collapsed ? <ChevronRightIcon size={16} /> : <ChevronDownIcon size={16} />}
           </button>
-          {expandable && !collapsed && (
+          {expandable && loaded && !collapsed && (
             <button
               type="button"
               className="btn-octicon expand-full"
               aria-label={anyExpanded ? 'Collapse expanded lines' : 'Expand all'}
               title={anyExpanded ? 'Collapse expanded lines' : 'Expand all'}
-              onClick={() => setGaps(file.path, anyExpanded ? undefined : expandAll(gaps))}
+              onClick={() => setGaps(file.path, anyExpanded ? undefined : expandAll(gaps), ws)}
             >
               {anyExpanded ? <FoldIcon size={16} /> : <UnfoldIcon size={16} />}
             </button>
@@ -355,11 +366,13 @@ function snippetFrom(rows: Array<UnifiedRow | SplitViewRow>, side: Side, start: 
 }
 
 function DiffTable(p: TableProps) {
-  const drafts = useStore((st) => st.drafts)
-  const composing = useStore((st) => st.composing)
-  const selection = useStore((st) => st.selection)
-  const { select, compose } = useStore.getState()
   const path = p.file.path
+  // Per-file selectors: interacting with one file does not re-render the others.
+  const view = useStore((st) => viewKey(st.range))
+  const comments = useStore(useShallow((st) => st.drafts.filter((d) => d.path === path && (d.view ?? '') === view)))
+  const composing = useStore((st) => (st.composing?.path === path ? st.composing : null))
+  const sel = useStore((st) => (st.selection?.path === path ? st.selection : null))
+  const { select, compose } = useStore.getState()
   const rows = useMemo(
     () =>
       p.view === 'split'
@@ -367,8 +380,6 @@ function DiffTable(p: TableProps) {
         : buildUnified(p.hunks, p.gaps, p.gapState, p.newLines, p.oldLines),
     [p.view, p.hunks, p.gaps, p.gapState, p.newLines, p.oldLines],
   )
-  const comments = useMemo(() => drafts.filter((d) => d.path === path), [drafts, path])
-  const sel = selection?.path === path ? selection : null
   const isSelected = (side: Side, no: number | null) => !!sel && no != null && sel.side === side && no >= sel.start && no <= sel.end
 
   const onNum = (side: Side, no: number | null, e: MouseEvent) => {
@@ -377,10 +388,17 @@ function DiffTable(p: TableProps) {
     else if (sel && sel.side === side && sel.start === no && sel.end === no) select(null)
     else select({ path, side, start: no, end: no })
   }
-  const startComment = (side: Side, no: number) => {
-    if (sel && sel.side === side && no >= sel.start && no <= sel.end && sel.start !== sel.end)
-      compose({ path, side, line: sel.end, startLine: sel.start })
-    else compose({ path, side, line: no })
+  /** "+" on a line: use the selected range when the line is inside it (either side). */
+  const startComment = (line: DiffLine, side: Side) => {
+    for (const s of ['LEFT', 'RIGHT'] as const) {
+      const n = s === 'LEFT' ? line.oldNo : line.newNo
+      if (sel && sel.side === s && n != null && n >= sel.start && n <= sel.end && sel.start !== sel.end) {
+        compose({ path, side: s, line: sel.end, startLine: sel.start })
+        return
+      }
+    }
+    const no = side === 'LEFT' ? line.oldNo : line.newNo
+    if (no != null) compose({ path, side, line: no })
   }
 
   const threadsAt = (side: Side, no: number | null) =>
@@ -402,14 +420,14 @@ function DiffTable(p: TableProps) {
     )
   }
 
-  const plusButton = (side: Side, no: number | null, any: boolean) =>
+  const plusButton = (line: DiffLine, side: Side, no: number | null, any: boolean) =>
     no == null ? null : (
       <button
         type="button"
         className={`add-line-comment ${any ? 'side-any' : ''}`}
         aria-label="Add line comment"
         title="Add a comment to this line"
-        onClick={() => startComment(side, no)}
+        onClick={() => startComment(line, side)}
       >
         <PlusIcon size={16} />
       </button>
@@ -418,12 +436,13 @@ function DiffTable(p: TableProps) {
   const codeCell = (line: DiffLine, side: Side, words: Range[] | null | undefined, any: boolean, extraClass = '') => {
     const no = side === 'LEFT' ? line.oldNo : line.newNo
     const runs = runsFor(line, side, p.hlOld, p.hlNew)
+    const selected = p.view === 'unified' ? isSelected('LEFT', line.oldNo) || isSelected('RIGHT', line.newNo) : isSelected(side, no)
     return (
       <td
-        className={`blob-code blob-code-${lineType(line.type)} ${isSelected(side, no) ? 'selected-line' : ''} ${extraClass}`}
+        className={`blob-code blob-code-${lineType(line.type)} ${selected ? 'selected-line' : ''} ${extraClass}`}
         data-split-side={p.view === 'split' ? (side === 'LEFT' ? 'left' : 'right') : undefined}
       >
-        {plusButton(side, no, any)}
+        {plusButton(line, side, no, any)}
         <span className="blob-code-inner blob-code-marker" data-code-marker={marker(line.type)}>
           <LineContent text={line.text} runs={runs} words={words} />
           {line.noNewline && (
@@ -472,22 +491,25 @@ function DiffTable(p: TableProps) {
             if (r.kind === 'hunk') return <tr key={r.key}>{hunkCells(r, 2, 1)}</tr>
             const l = r.line
             const side: Side = l.type === 'del' ? 'LEFT' : 'RIGHT'
-            const no = side === 'LEFT' ? l.oldNo : l.newNo
             const t = lineType(l.type)
+            const rowSelected = isSelected('LEFT', l.oldNo) || isSelected('RIGHT', l.newNo)
+            // Left number = old file line, right number = new file line (like GitHub's L/R anchors).
+            const leftTarget: [Side, number | null] = l.oldNo != null ? ['LEFT', l.oldNo] : ['RIGHT', l.newNo]
+            const rightTarget: [Side, number | null] = l.newNo != null ? ['RIGHT', l.newNo] : ['LEFT', l.oldNo]
             const commentsRight = l.type !== 'del' ? commentCell('RIGHT', l.newNo) : null
             const commentsLeft = l.type !== 'add' ? commentCell('LEFT', l.oldNo) : null
             return (
               <FragmentRows key={r.key}>
                 <tr>
                   <td
-                    className={`blob-num blob-num-${t} ${isSelected(side, no) ? 'selected-line' : ''}`}
+                    className={`blob-num blob-num-${t} ${rowSelected ? 'selected-line' : ''}`}
                     data-line-number={l.oldNo ?? undefined}
-                    onClick={(e) => onNum(side, no, e)}
+                    onClick={(e) => onNum(leftTarget[0], leftTarget[1], e)}
                   />
                   <td
-                    className={`blob-num blob-num-${t} ${isSelected(side, no) ? 'selected-line' : ''}`}
+                    className={`blob-num blob-num-${t} ${rowSelected ? 'selected-line' : ''}`}
                     data-line-number={l.newNo ?? undefined}
-                    onClick={(e) => onNum(side, no, e)}
+                    onClick={(e) => onNum(rightTarget[0], rightTarget[1], e)}
                   />
                   {codeCell(l, side, r.words, true)}
                 </tr>
@@ -640,7 +662,15 @@ function Thread({ c }: { c: ReviewComment }) {
             <span className="Label Label--attention">Pending</span>
             <span style={{ fontSize: 12 }}>{linesLabel(c)}</span>
             <span className="actions">
-              <button type="button" className="btn btn-sm btn-invisible" aria-label="Edit comment" onClick={() => setEditing(true)}>
+              <button
+                type="button"
+                className="btn btn-sm btn-invisible"
+                aria-label="Edit comment"
+                onClick={() => {
+                  setBody(c.body)
+                  setEditing(true)
+                }}
+              >
                 <PencilIcon size={16} />
               </button>
               <button type="button" className="btn btn-sm btn-invisible" aria-label="Delete comment" onClick={() => deleteComment(c.id)}>
@@ -652,14 +682,22 @@ function Thread({ c }: { c: ReviewComment }) {
             <div className="comment-form" style={{ padding: '8px 0 0' }}>
               <CommentBox value={body} onChange={setBody} autoFocus />
               <div className="comment-form-actions">
-                <button type="button" className="btn btn-sm" onClick={() => setEditing(false)}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setBody(c.body)
+                    setEditing(false)
+                  }}
+                >
                   Cancel
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm btn-primary"
+                  disabled={!body.trim()}
                   onClick={() => {
-                    updateComment(c.id, body)
+                    updateComment(c.id, body.trim())
                     setEditing(false)
                   }}
                 >

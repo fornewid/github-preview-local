@@ -2,9 +2,12 @@
 //! the GitHub CLI. Works with github.com and GitHub Enterprise Server hosts.
 
 use crate::git::Git;
-use crate::model::{PublishRequest, PublishResult, Snapshot};
-use std::io::Write;
-use std::process::{Command, Stdio};
+use crate::model::{ExistingPr, PublishRequest, PublishResult, Snapshot};
+use std::process::Command;
+use std::time::Duration;
+
+const PUSH_TIMEOUT: Duration = Duration::from_secs(300);
+const GH_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn gh_repo(s: &Snapshot) -> Option<String> {
     let owner = s.repo.owner.as_deref()?;
@@ -12,30 +15,48 @@ fn gh_repo(s: &Snapshot) -> Option<String> {
     Some(format!("{host}/{owner}/{}", s.repo.name))
 }
 
-fn run(cmd: &mut Command, log: &mut String, stdin: Option<&str>) -> Result<String, String> {
+fn run(mut cmd: Command, log: &mut String, stdin: Option<&str>, timeout: Duration) -> Result<String, String> {
     let shown = format!("{:?}", cmd).replace('"', "");
     log.push_str(&format!("$ {shown}\n"));
-    let mut child = cmd
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GH_PROMPT_DISABLED", "1")
-        .spawn()
-        .map_err(|e| format!("{shown}: {e}"))?;
-    if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        let _ = pipe.write_all(input.as_bytes());
+    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GH_PROMPT_DISABLED", "1");
+    let out = crate::proc::run(cmd, stdin, timeout).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("{shown}: command not found")
+        } else {
+            format!("{shown}: {e}")
+        }
+    })?;
+    log.push_str(&out.stdout);
+    log.push_str(&out.stderr);
+    if out.timed_out {
+        return Err(format!("{shown} timed out after {}s", timeout.as_secs()));
     }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    log.push_str(&stdout);
-    log.push_str(&stderr);
-    if out.status.success() {
-        Ok(stdout)
+    if out.success() {
+        Ok(out.stdout)
     } else {
-        Err(format!("{shown} failed:\n{}{}", stdout, stderr))
+        Err(format!("{shown} failed:\n{}{}", out.stdout, out.stderr))
     }
+}
+
+fn gh(git: &Git) -> Command {
+    let mut c = Command::new("gh");
+    c.current_dir(&git.root);
+    c
+}
+
+/// The open pull request for the head branch, if any (one API call).
+pub fn find_pr(git: &Git, s: &Snapshot) -> Result<Option<ExistingPr>, String> {
+    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the remote URL")?;
+    let mut log = String::new();
+    let mut view = gh(git);
+    view.args(["pr", "list", "-R", &repo, "--head", &s.head.name, "--state", "open", "--json", "number,url,state,isDraft", "--limit", "1"]);
+    let out = run(view, &mut log, None, GH_TIMEOUT)?;
+    let v: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
+    Ok(v.as_array().and_then(|a| a.first()).map(|p| ExistingPr {
+        number: p.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
+        url: p.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string(),
+        state: if p.get("isDraft").and_then(|d| d.as_bool()).unwrap_or(false) { "DRAFT".into() } else { "OPEN".into() },
+    }))
 }
 
 pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishRequest) -> Result<PublishResult, String> {
@@ -49,50 +70,47 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
     if s.head.name == s.base.name {
         return Err(format!("the head branch `{branch}` is the base branch; create a feature branch first"));
     }
+    if s.range.from.is_some() {
+        return Err("switch back to “Show all changes” before confirming".into());
+    }
+    if s.mode == "worktree" {
+        let status = git.run(&["status", "--porcelain"]).unwrap_or_default();
+        if !status.trim().is_empty() {
+            return Err(
+                "this preview includes uncommitted changes (--uncommitted). Commit them first: only commits are pushed.".into(),
+            );
+        }
+    }
     let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the remote URL")?;
+    let host = s.repo.host.clone().unwrap_or_else(|| "github.com".into());
+
+    // Fail before pushing when gh is missing or not logged in to this host.
+    let mut auth = gh(git);
+    auth.args(["auth", "status", "--hostname", &host]);
+    run(auth, &mut log, None, GH_TIMEOUT).map_err(|e| {
+        format!("The GitHub CLI (`gh`) must be installed and logged in to {host} (`gh auth login --hostname {host}`).\n\n{e}")
+    })?;
+
+    let existing = find_pr(git, s).unwrap_or(None);
 
     let mut push = git.cmd();
     push.args(["push", "--set-upstream", remote, &format!("{branch}:refs/heads/{branch}")]);
-    run(&mut push, &mut log, None)?;
+    run(push, &mut log, None, PUSH_TIMEOUT)?;
 
-    // Reuse an open pull request for this branch if there is one.
-    let mut view = Command::new("gh");
-    view.current_dir(&git.root)
-        .args(["pr", "view", branch, "-R", &repo, "--json", "number,url,state"]);
-    if let Ok(out) = run(&mut view, &mut log, None) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
-            if v.get("state").and_then(|s| s.as_str()) == Some("OPEN") {
-                let url = v.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string();
-                return Ok(PublishResult { url, created: false, draft: false, log });
-            }
-        }
+    if let Some(pr) = existing {
+        let draft = pr.state == "DRAFT";
+        log.push_str(&format!("Pushed to the existing pull request #{} (title and description unchanged).\n", pr.number));
+        return Ok(PublishResult { url: pr.url, created: false, draft, log });
     }
 
-    let mut create = Command::new("gh");
-    create.current_dir(&git.root).args([
-        "pr",
-        "create",
-        "-R",
-        &repo,
-        "--base",
-        &s.base.name,
-        "--head",
-        branch,
-        "--title",
-        &req.title,
-        "--body-file",
-        "-",
+    let mut create = gh(git);
+    create.args([
+        "pr", "create", "-R", &repo, "--base", &s.base.name, "--head", branch, "--title", &req.title, "--body-file", "-",
     ]);
     if req.draft {
         create.arg("--draft");
     }
-    let out = run(&mut create, &mut log, Some(&req.body)).map_err(|e| {
-        if e.contains("No such file") || e.contains("not found") && e.contains("gh") {
-            format!("The GitHub CLI (`gh`) is required to open pull requests: https://cli.github.com\n\n{e}")
-        } else {
-            e
-        }
-    })?;
+    let out = run(create, &mut log, Some(&req.body), GH_TIMEOUT)?;
     let url = out
         .lines()
         .rev()

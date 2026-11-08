@@ -6,6 +6,7 @@ import {
   GitCommitIcon,
   GitPullRequestIcon,
   PlayIcon,
+  StopIcon,
   SyncIcon,
   XCircleFillIcon,
   CommentIcon,
@@ -25,6 +26,8 @@ export function CheckStatusIcon({ status }: { status: CheckStatus }) {
       return <SyncIcon size={16} className="anim-rotate" fill="var(--fgColor-attention)" />
     case 'queued':
       return <DotFillIcon size={16} fill="var(--fgColor-attention)" />
+    case 'cancelled':
+      return <StopIcon size={16} fill="var(--fgColor-muted)" />
     default:
       return <CircleIcon size={16} fill="var(--fgColor-muted)" />
   }
@@ -231,8 +234,9 @@ export function CommitsTab() {
 
 export function ChecksTab() {
   const checks = useStore((st) => st.checks)
+  const checksError = useStore((st) => st.checksError)
   const transport = useStore((st) => st.transport)!
-  const { runCheck, runAllChecks } = useStore.getState()
+  const { runCheck, runAllChecks, cancelCheck } = useStore.getState()
   const [selected, setSelected] = useState<string | null>(null)
   if (!transport.capabilities.checks)
     return (
@@ -243,6 +247,15 @@ export function ChecksTab() {
         </p>
       </div>
     )
+  if (checksError)
+    return (
+      <div className="Box blankslate">
+        <h3>Could not read the checks configuration</h3>
+        <pre className="text-mono" style={{ textAlign: 'left', display: 'inline-block', fontSize: 12, whiteSpace: 'pre-wrap' }}>
+          {checksError}
+        </pre>
+      </div>
+    )
   if (!checks.length)
     return (
       <div className="Box blankslate">
@@ -250,6 +263,7 @@ export function ChecksTab() {
         <p>
           Add <code>.prv.toml</code> to the repository root, for example:
         </p>
+        <p style={{ fontSize: 12 }}>Checks run commands from this repository on your machine — only run them in repositories you trust.</p>
         <pre className="text-mono" style={{ textAlign: 'left', display: 'inline-block', fontSize: 12 }}>
           {'[[checks]]\nname = "lint"\nrun = "npm run lint"\n\n[[checks]]\nname = "test"\nrun = "./gradlew test"'}
         </pre>
@@ -287,18 +301,21 @@ export function ChecksTab() {
             <h2>{cur.name}</h2>
             <div className="sub text-mono">$ {cur.run}</div>
           </div>
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={cur.status === 'running' || cur.status === 'queued'}
-            onClick={() => void runCheck(cur.name)}
-          >
-            {cur.status === 'idle' ? 'Run' : 'Re-run'}
-          </button>
+          {cur.status === 'running' || cur.status === 'queued' ? (
+            <button type="button" className="btn btn-sm" onClick={() => void cancelCheck(cur.name)}>
+              Cancel
+            </button>
+          ) : (
+            <button type="button" className="btn btn-sm" disabled={running} onClick={() => void runCheck(cur.name)}>
+              {cur.status === 'idle' ? 'Run' : 'Re-run'}
+            </button>
+          )}
         </div>
         <pre className="CheckRun-log">
           {cur.output || (cur.status === 'idle' ? 'This check has not run yet.' : '')}
-          {cur.status === 'success' || cur.status === 'failure' ? `\n\nProcess exited with code ${cur.exitCode ?? '?'}` : ''}
+          {cur.status === 'success' || cur.status === 'failure'
+            ? `\n\nProcess exited with code ${cur.exitCode ?? '(killed)'}`
+            : ''}
         </pre>
       </div>
     </div>

@@ -75,50 +75,126 @@ export function plural(n: number, one: string, many = one + 's') {
   return `${n} ${n === 1 ? one : many}`
 }
 
-/** Minimal `.editorconfig` lookup for `tab_width` / `indent_size`. */
+const tabCache = new Map<string, number>()
+
+/** Minimal `.editorconfig` lookup for `tab_width` / `indent_size` (never throws). */
 export function tabSizeFor(editorconfig: string | null | undefined, path: string): number {
+  if (!editorconfig) return 8
+  const key = `${editorconfig.length}:${hashOf(editorconfig)}:${path}`
+  const cached = tabCache.get(key)
+  if (cached !== undefined) return cached
   let size = 8
-  if (!editorconfig) return size
-  let matches = false
-  for (const raw of editorconfig.split('\n')) {
-    const line = raw.trim()
-    if (!line || line.startsWith('#') || line.startsWith(';')) continue
-    const sec = /^\[(.*)\]$/.exec(line)
-    if (sec) {
-      matches = globMatch(sec[1], path)
-      continue
+  try {
+    let matches = false
+    for (const raw of editorconfig.split('\n')) {
+      const line = raw.trim()
+      if (!line || line.startsWith('#') || line.startsWith(';')) continue
+      const sec = /^\[(.*)\]$/.exec(line)
+      if (sec) {
+        matches = globMatch(sec[1], path)
+        continue
+      }
+      if (!matches) continue
+      const kv = /^([a-z_]+)\s*=\s*(\S+)/i.exec(line)
+      if (!kv) continue
+      const k = kv[1].toLowerCase()
+      const v = parseInt(kv[2], 10)
+      if ((k === 'tab_width' || k === 'indent_size') && v > 0 && v <= 32) size = v
     }
-    if (!matches) continue
-    const kv = /^([a-z_]+)\s*=\s*(\S+)/i.exec(line)
-    if (!kv) continue
-    const k = kv[1].toLowerCase()
-    const v = parseInt(kv[2], 10)
-    if ((k === 'tab_width' || k === 'indent_size') && v > 0) size = v
+  } catch {
+    size = 8
   }
+  tabCache.set(key, size)
   return size
 }
 
-function globMatch(glob: string, path: string) {
-  const base = path.split('/').pop() ?? path
-  const target = glob.includes('/') ? path : base
+function hashOf(s: string) {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  return h
+}
+
+/** Index of the `}` closing the `{` at `open`, honoring nesting; -1 if none. */
+function closingBrace(glob: string, open: number) {
+  let depth = 0
+  for (let i = open; i < glob.length; i++) {
+    if (glob[i] === '\\') i++
+    else if (glob[i] === '{') depth++
+    else if (glob[i] === '}' && --depth === 0) return i
+  }
+  return -1
+}
+
+function splitTopLevel(s: string) {
+  const parts: string[] = []
+  let depth = 0
+  let cur = ''
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '\\') {
+      cur += c + (s[i + 1] ?? '')
+      i++
+      continue
+    }
+    if (c === '{') depth++
+    if (c === '}') depth--
+    if (c === ',' && depth === 0) {
+      parts.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  parts.push(cur)
+  return parts
+}
+
+function globToRe(glob: string): string {
   let re = ''
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i]
-    if (c === '*') {
+    if (c === '\\') {
+      re += escapeRe(glob[i + 1] ?? '\\')
+      i++
+    } else if (c === '*') {
       if (glob[i + 1] === '*') {
         re += '.*'
         i++
       } else re += '[^/]*'
     } else if (c === '?') re += '[^/]'
     else if (c === '{') {
-      const end = glob.indexOf('}', i)
-      re += '(' + glob.slice(i + 1, end).split(',').map(escapeRe).join('|') + ')'
+      const end = closingBrace(glob, i)
+      if (end < 0) {
+        re += '\\{'
+        continue
+      }
+      re += '(?:' + splitTopLevel(glob.slice(i + 1, end)).map(globToRe).join('|') + ')'
+      i = end
+    } else if (c === '[') {
+      const end = glob.indexOf(']', i + 1)
+      if (end < 0) {
+        re += '\\['
+        continue
+      }
+      let body = glob.slice(i + 1, end)
+      const negate = body.startsWith('!')
+      if (negate) body = body.slice(1)
+      re += '[' + (negate ? '^' : '') + body.replace(/[\\\]^[]/g, '\\$&') + ']'
       i = end
     } else re += escapeRe(c)
   }
-  return new RegExp(`^${re}$`).test(target)
+  return re
+}
+
+function globMatch(glob: string, path: string) {
+  const base = path.split('/').pop() ?? path
+  const target = glob.includes('/') ? path.replace(/^\/?/, '/') : base
+  const pattern = glob.includes('/') && !glob.startsWith('/') && !glob.startsWith('**') ? '**/' + glob : glob
+  try {
+    return new RegExp(`^${globToRe(pattern)}$`).test(target)
+  } catch {
+    return false
+  }
 }
 
 function escapeRe(s: string) {
-  return s.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  return s.replace(/[.+^${}()|[\]\\*?]/g, '\\$&')
 }
