@@ -1,0 +1,11 @@
+{
+  "name": "github-preview-local",
+  "owner": { "name": "fornewid" },
+  "plugins": [
+    {
+      "name": "prv",
+      "source": "./plugin",
+      "description": "Local GitHub-style pull request preview with review comments for Claude Code."
+    }
+  ]
+}

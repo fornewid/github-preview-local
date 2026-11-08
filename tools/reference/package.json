@@ -1,0 +1,13 @@
+{
+  "name": "prv-reference-tools",
+  "private": true,
+  "type": "module",
+  "description": "Capture github.com reference screenshots/styles and screenshot prv exports for side-by-side comparison (uses the locally installed Chrome).",
+  "scripts": {
+    "capture": "node capture.mjs",
+    "shoot": "node shoot.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.56.0"
+  }
+}
