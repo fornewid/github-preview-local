@@ -44,15 +44,30 @@ fn gh(git: &Git) -> Command {
     c
 }
 
-/// The open pull request for the head branch, if any (one API call).
+/// The open pull request from this repository's head branch into the base
+/// branch, if any (one API call). Pull requests from forks that happen to use
+/// the same branch name are ignored.
 pub fn find_pr(git: &Git, s: &Snapshot) -> Result<Option<ExistingPr>, String> {
     let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the remote URL")?;
+    let owner = s.repo.owner.clone().unwrap_or_default();
     let mut log = String::new();
-    let mut view = gh(git);
-    view.args(["pr", "list", "-R", &repo, "--head", &s.head.name, "--state", "open", "--json", "number,url,state,isDraft", "--limit", "1"]);
-    let out = run(view, &mut log, None, GH_TIMEOUT)?;
+    let mut list = gh(git);
+    list.args([
+        "pr", "list", "-R", &repo, "--head", &s.head.name, "--state", "open", "--limit", "30", "--json",
+        "number,url,isDraft,isCrossRepository,headRepositoryOwner,baseRefName",
+    ]);
+    let out = run(list, &mut log, None, GH_TIMEOUT)?;
     let v: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
-    Ok(v.as_array().and_then(|a| a.first()).map(|p| ExistingPr {
+    let found = v.as_array().into_iter().flatten().find(|p| {
+        let same_repo = !p.get("isCrossRepository").and_then(|b| b.as_bool()).unwrap_or(true)
+            && p.pointer("/headRepositoryOwner/login")
+                .and_then(|l| l.as_str())
+                .map(|l| l.eq_ignore_ascii_case(&owner))
+                .unwrap_or(false);
+        let same_base = p.get("baseRefName").and_then(|b| b.as_str()) == Some(s.base.name.as_str());
+        same_repo && same_base
+    });
+    Ok(found.map(|p| ExistingPr {
         number: p.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
         url: p.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string(),
         state: if p.get("isDraft").and_then(|d| d.as_bool()).unwrap_or(false) { "DRAFT".into() } else { "OPEN".into() },
@@ -66,6 +81,10 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
     // Only the checked-out branch is pushed; a detached HEAD or another ref is rejected.
     if git.line(&["symbolic-ref", "--short", "-q", "HEAD"]).as_deref() != Some(branch.as_str()) {
         return Err(format!("`{branch}` is not the checked-out branch; check it out to publish it"));
+    }
+    // Push exactly what was reviewed.
+    if git.line(&["rev-parse", "HEAD"]).as_deref() != Some(s.head.sha.as_str()) {
+        return Err("the branch has new commits since this preview was opened; reopen `prv` to review them".into());
     }
     if s.head.name == s.base.name {
         return Err(format!("the head branch `{branch}` is the base branch; create a feature branch first"));

@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Parser, Debug)]
@@ -123,7 +123,7 @@ fn state_file(git: &Git, branch: &str) -> PathBuf {
 }
 
 fn is_sha(s: &str) -> bool {
-    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+    (s.len() == 40 || s.len() == 64) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[tauri::command]
@@ -222,20 +222,8 @@ fn run_check(handle: tauri::AppHandle, app: State<'_, AppState>, name: String) -
             );
         };
         emit(Some("running"), None, None);
-        // Batch output so the UI re-renders at most ~10 times per second.
-        let mut buf = String::new();
-        let mut last = Instant::now();
-        let code = checks::run(&def, &root, &env, &cancel, |c| {
-            buf.push_str(c);
-            if last.elapsed() > Duration::from_millis(100) || buf.len() > 64 * 1024 {
-                emit(None, Some(&buf), None);
-                buf.clear();
-                last = Instant::now();
-            }
-        });
-        if !buf.is_empty() {
-            emit(None, Some(&buf), None);
-        }
+        // Output arrives batched (at most ~10 events per second).
+        let code = checks::run(&def, &root, &env, &cancel, |c| emit(None, Some(c), None));
         let status = if cancel.load(Ordering::SeqCst) {
             "cancelled"
         } else if code == Some(0) {
@@ -312,12 +300,13 @@ fn open_in_editor(app: State<'_, AppState>, path: String, line: Option<u32>) -> 
     if !cur.snapshot.files.iter().any(|f| f.path == path && f.status != "deleted") {
         return Err("not a changed file".into());
     }
+    // Canonical paths are only used for the containment check (Windows returns \\?\ paths).
     let root = app.git.root.canonicalize().map_err(|e| e.to_string())?;
-    let file = root.join(&path).canonicalize().map_err(|e| e.to_string())?;
-    if !file.starts_with(&root) || !file.is_file() {
+    let canonical = app.git.root.join(&path).canonicalize().map_err(|e| e.to_string())?;
+    if !canonical.starts_with(&root) || !canonical.is_file() {
         return Err("the file is outside the repository".into());
     }
-    let f = file.to_string_lossy().into_owned();
+    let f = app.git.root.join(&path).to_string_lossy().into_owned();
     let target = format!("{f}:{}", line.unwrap_or(1));
     let spawn = |prog: &str, args: &[&str]| std::process::Command::new(prog).args(args).spawn().is_ok();
     if let Ok(editor) = std::env::var("PRV_EDITOR") {
@@ -336,7 +325,11 @@ fn open_in_editor(app: State<'_, AppState>, path: String, line: Option<u32>) -> 
     } else {
         false
     };
-    if ok { Ok(()) } else { Err("no editor found; set PRV_EDITOR (e.g. PRV_EDITOR=subl)".into()) }
+    if ok {
+        Ok(())
+    } else {
+        Err("no editor found: install the VS Code `code` command or set PRV_EDITOR (e.g. PRV_EDITOR=gedit)".into())
+    }
 }
 
 /// Opens an http(s) URL or a local HTML file in the default browser.
@@ -448,14 +441,19 @@ fn main() {
             if defs.is_empty() {
                 fail("no checks found (add a .prv.toml)");
             }
-            let never = AtomicBool::new(false);
+            static STOP: AtomicBool = AtomicBool::new(false);
+            // Ctrl-C / SIGTERM: stop the running check's whole process group, then exit.
+            let _ = ctrlc::set_handler(|| STOP.store(true, Ordering::SeqCst));
             let mut results = vec![];
             for d in &defs {
                 if !json {
                     eprintln!("── {} ── $ {}", d.name, d.run);
                 }
                 let mut output = String::new();
-                let code = checks::run(d, &git.root, &env, &never, |c| {
+                if STOP.load(Ordering::SeqCst) {
+                    break;
+                }
+                let code = checks::run(d, &git.root, &env, &STOP, |c| {
                     if !json {
                         eprint!("{c}");
                     }
@@ -472,6 +470,10 @@ fn main() {
                 }
                 let tail: String = output.chars().rev().take(4000).collect::<Vec<_>>().into_iter().rev().collect();
                 results.push(serde_json::json!({ "name": d.name, "run": d.run, "success": ok, "exitCode": code, "outputTail": tail }));
+            }
+            if STOP.load(Ordering::SeqCst) {
+                eprintln!("prv: interrupted");
+                std::process::exit(130);
             }
             let failed = results.iter().filter(|r| r["success"] == false).count();
             if json {
@@ -532,6 +534,9 @@ fn run_window(git: Git, opts: Options, format: Format) {
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            // Ctrl-C / SIGTERM / SIGHUP (e.g. the agent stops prv): exit cleanly so running checks are killed.
+            let handle = app.handle().clone();
+            let _ = ctrlc::set_handler(move || handle.exit(130));
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 // Links (PR template, comments) open in the browser instead of replacing the UI.
                 .on_navigation(|url| {

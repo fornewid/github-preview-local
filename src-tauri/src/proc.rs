@@ -1,5 +1,5 @@
-//! Child-process helpers: timeouts without pipe deadlocks, whole process-tree
-//! termination, and UTF-8 safe streaming.
+//! Child-process helpers: timeouts without pipe deadlocks, process-group
+//! termination for checks, and UTF-8 safe, rate-limited output streaming.
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -20,7 +20,9 @@ impl Output {
     }
 }
 
-/// Puts the child in its own process group (Unix) so the whole tree can be killed.
+/// Puts the child in its own process group (Unix) so the whole tree can be
+/// killed. Only for checks: git/gh stay in the terminal's foreground group so
+/// ssh / credential prompts keep working.
 pub fn own_group(cmd: &mut Command) {
     #[cfg(unix)]
     {
@@ -31,39 +33,22 @@ pub fn own_group(cmd: &mut Command) {
     let _ = cmd;
 }
 
-/// Kills every process left in the child's process group (Unix).
+/// Kills every process in the process group led by `pid` (Unix).
 pub fn kill_group(pid: u32) {
     #[cfg(unix)]
-    let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    #[cfg(not(unix))]
-    let _ = pid;
-}
-
-/// Kills the child and everything it started.
-pub fn kill_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    #[cfg(unix)]
-    let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{pid}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+    }
     #[cfg(windows)]
     let _ = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &pid])
+        .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// Reads a pipe, sending complete UTF-8 text (multi-byte characters are never split).
-pub fn spawn_reader(mut pipe: Box<dyn Read + Send>, tx: mpsc::Sender<String>) {
+fn spawn_reader(mut pipe: Box<dyn Read + Send>, tx: mpsc::SyncSender<String>) {
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         let mut carry: Vec<u8> = Vec::new();
@@ -96,57 +81,59 @@ pub fn spawn_reader(mut pipe: Box<dyn Read + Send>, tx: mpsc::Sender<String>) {
 }
 
 /// Runs a command to completion with a timeout, optional stdin, and both pipes
-/// drained concurrently.
+/// drained concurrently (no deadlock on large output).
 pub fn run(mut cmd: Command, stdin: Option<&str>, timeout: Duration) -> std::io::Result<Output> {
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    own_group(&mut cmd);
     let mut child = cmd.spawn()?;
     if let (Some(input), Some(mut pipe)) = (stdin.map(str::to_owned), child.stdin.take()) {
         std::thread::spawn(move || {
             let _ = pipe.write_all(input.as_bytes());
         });
     }
-    let (otx, orx) = mpsc::channel();
-    let (etx, erx) = mpsc::channel();
+    let (otx, orx) = mpsc::sync_channel(64);
+    let (etx, erx) = mpsc::sync_channel(64);
     if let Some(p) = child.stdout.take() {
         spawn_reader(Box::new(p), otx);
     }
     if let Some(p) = child.stderr.take() {
         spawn_reader(Box::new(p), etx);
     }
+    // Collect concurrently so a full pipe never blocks the child.
+    let collect = |rx: mpsc::Receiver<String>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            while let Ok(c) = rx.recv() {
+                s.push_str(&c);
+            }
+            s
+        })
+    };
+    let (oh, eh) = (collect(orx), collect(erx));
     let start = Instant::now();
     let (code, timed_out) = loop {
         if let Some(status) = child.try_wait()? {
             break (status.code(), false);
         }
         if start.elapsed() > timeout {
-            kill_tree(&mut child);
+            let _ = child.kill();
+            let _ = child.wait();
             break (None, true);
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let collect = |rx: mpsc::Receiver<String>| {
-        let mut s = String::new();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while let Ok(chunk) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            s.push_str(&chunk);
-        }
-        s
-    };
-    Ok(Output { code, stdout: collect(orx), stderr: collect(erx), timed_out })
+    Ok(Output { code, stdout: oh.join().unwrap_or_default(), stderr: eh.join().unwrap_or_default(), timed_out })
 }
 
-/// Streams a long-running command's output; stops on exit, timeout or cancel.
-/// Returns the exit code (None when killed).
-pub fn stream(
-    mut child: Child,
-    timeout: Duration,
-    cancel: &AtomicBool,
-    mut on_chunk: impl FnMut(&str),
-) -> Option<i32> {
-    let (tx, rx) = mpsc::channel::<String>();
+const FLUSH_EVERY: Duration = Duration::from_millis(100);
+const MAX_BATCH: usize = 256 * 1024;
+
+/// Streams a check's output in batches (at most every 100ms, always flushed
+/// when quiet); stops on exit, timeout or cancel. Returns the exit code
+/// (None when killed). The child must have been spawned with `own_group`.
+pub fn stream(mut child: Child, timeout: Duration, cancel: &AtomicBool, mut on_output: impl FnMut(&str)) -> Option<i32> {
+    let (tx, rx) = mpsc::sync_channel::<String>(256);
     if let Some(p) = child.stdout.take() {
         spawn_reader(Box::new(p), tx.clone());
     }
@@ -154,40 +141,67 @@ pub fn stream(
         spawn_reader(Box::new(p), tx.clone());
     }
     drop(tx);
+    let pid = child.id();
     let start = Instant::now();
-    let drain = |rx: &mpsc::Receiver<String>, on_chunk: &mut dyn FnMut(&str), grace: Duration| {
-        let deadline = Instant::now() + grace;
-        while let Ok(c) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            on_chunk(&c);
+    let mut buf = String::new();
+    let mut last_flush = Instant::now();
+    let flush = |buf: &mut String, on_output: &mut dyn FnMut(&str)| {
+        if buf.is_empty() {
+            return;
         }
-    };
-    loop {
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(c) => {
-                on_chunk(&c);
-                while let Ok(c) = rx.try_recv() {
-                    on_chunk(&c);
-                }
+        if buf.len() > MAX_BATCH {
+            // Keep the tail; the UI keeps only the last part anyway.
+            let mut cut = buf.len() - MAX_BATCH;
+            while !buf.is_char_boundary(cut) {
+                cut += 1;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(Duration::from_millis(50)),
+            let tail = format!("…(output truncated)…\n{}", &buf[cut..]);
+            *buf = tail;
+        }
+        on_output(buf);
+        buf.clear();
+    };
+    let mut disconnected = false;
+    loop {
+        // Receive for at most ~50ms per iteration so exit/cancel/timeout are always checked.
+        let tick = Instant::now() + Duration::from_millis(50);
+        while !disconnected {
+            match rx.recv_timeout(tick.saturating_duration_since(Instant::now())) {
+                Ok(c) => buf.push_str(&c),
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
+            }
+        }
+        if disconnected {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if last_flush.elapsed() >= FLUSH_EVERY {
+            flush(&mut buf, &mut on_output);
+            last_flush = Instant::now();
         }
         if let Ok(Some(status)) = child.try_wait() {
-            drain(&rx, &mut on_chunk, Duration::from_millis(500));
-            // Background processes left behind by the check are stopped, like a CI job.
-            kill_group(child.id());
+            // Stop background processes the check left behind (like a CI job), then drain.
+            kill_group(pid);
+            let deadline = Instant::now() + Duration::from_millis(300);
+            while let Ok(c) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                buf.push_str(&c);
+            }
+            flush(&mut buf, &mut on_output);
             return status.code().or(Some(1));
         }
-        if cancel.load(Ordering::SeqCst) {
-            kill_tree(&mut child);
-            drain(&rx, &mut on_chunk, Duration::from_millis(200));
-            on_chunk("\nCancelled.\n");
-            return None;
-        }
-        if start.elapsed() > timeout {
-            kill_tree(&mut child);
-            drain(&rx, &mut on_chunk, Duration::from_millis(200));
-            on_chunk(&format!("\nTimed out after {}s.\n", timeout.as_secs()));
+        let stop = if cancel.load(Ordering::SeqCst) {
+            Some("\nCancelled.\n".to_string())
+        } else if start.elapsed() > timeout {
+            Some(format!("\nTimed out after {}s.\n", timeout.as_secs()))
+        } else {
+            None
+        };
+        if let Some(msg) = stop {
+            kill_group(pid);
+            let _ = child.kill();
+            let _ = child.wait();
+            buf.push_str(&msg);
+            flush(&mut buf, &mut on_output);
             return None;
         }
     }

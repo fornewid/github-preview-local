@@ -185,9 +185,14 @@ function globToRe(glob: string): string {
 }
 
 function globMatch(glob: string, path: string) {
+  // Pathological patterns (catastrophic backtracking) are ignored.
+  if (glob.length > 200 || (glob.match(/\*/g)?.length ?? 0) > 16) return false
+  glob = glob.replace(/\*{3,}/g, '**')
   const base = path.split('/').pop() ?? path
-  const target = glob.includes('/') ? path.replace(/^\/?/, '/') : base
-  const pattern = glob.includes('/') && !glob.startsWith('/') && !glob.startsWith('**') ? '**/' + glob : glob
+  // EditorConfig: a glob containing `/` is relative to the .editorconfig directory (the repository root).
+  const anchored = glob.includes('/')
+  const target = anchored ? '/' + path : base
+  const pattern = anchored && !glob.startsWith('/') ? '/' + glob : glob
   try {
     return new RegExp(`^${globToRe(pattern)}$`).test(target)
   } catch {

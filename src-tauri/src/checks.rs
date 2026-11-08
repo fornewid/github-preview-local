@@ -124,15 +124,15 @@ pub fn run(
     root: &Path,
     env: &[(String, String)],
     cancel: &AtomicBool,
-    mut on_chunk: impl FnMut(&str),
+    mut on_output: impl FnMut(&str),
 ) -> Option<i32> {
     let child = match spawn(def, root, env) {
         Ok(c) => c,
         Err(e) => {
-            on_chunk(&format!("failed to start: {e}\n"));
+            on_output(&format!("failed to start: {e}\n"));
             return Some(127);
         }
     };
     let timeout = Duration::from_secs(def.timeout.unwrap_or(DEFAULT_TIMEOUT));
-    crate::proc::stream(child, timeout, cancel, on_chunk)
+    crate::proc::stream(child, timeout, cancel, on_output)
 }

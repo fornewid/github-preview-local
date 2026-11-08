@@ -285,7 +285,8 @@ fn split_patch(text: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![];
     for line in text.split_inclusive('\n') {
         if line.starts_with("diff --git ") {
-            out.push((line.trim_end().to_string(), String::new()));
+            // Do not trim: git does not quote trailing spaces in file names.
+            out.push((line.strip_suffix('\n').unwrap_or(line).to_string(), String::new()));
         }
         if let Some(last) = out.last_mut() {
             last.1.push_str(line);

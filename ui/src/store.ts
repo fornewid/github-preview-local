@@ -217,10 +217,11 @@ export const useStore = create<Store>((set, get) => ({
     const t = get().transport
     if (!t) return
     const range = q ?? get().range
-    set((s) => ({ loading: true, range, generation: s.generation + 1, contents: {}, hl: {}, fileUI: {}, composing: null, selection: null }))
+    set({ loading: true, composing: null, selection: null })
     try {
       const snapshot = await t.getSnapshot(range)
-      set({ snapshot, loading: false })
+      // Invalidate contents only once the new snapshot is current on both sides.
+      set((s) => ({ snapshot, range, loading: false, generation: s.generation + 1, contents: {}, hl: {}, fileUI: {} }))
     } catch (e) {
       set({ error: String(e), loading: false })
     }
@@ -258,8 +259,8 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   ensureContents(f) {
-    const { transport, snapshot, contents, generation } = get()
-    if (!transport || !snapshot || f.binary || f.submodule) return
+    const { transport, snapshot, contents, generation, loading } = get()
+    if (!transport || !snapshot || loading || f.binary || f.submodule) return
     const sides: Array<['old' | 'new', string]> = []
     if (f.status !== 'added') sides.push(['old', f.oldPath ?? f.path])
     if (f.status !== 'deleted') sides.push(['new', f.path])
@@ -333,7 +334,9 @@ export const useStore = create<Store>((set, get) => ({
 
   async runAllChecks() {
     // One at a time: tools often share caches/locks (target/, .gradle) or modify files.
-    for (const c of get().checks) await get().runCheck(c.name)
+    for (const c of get().checks) {
+      if ((await get().runCheck(c.name)) === 'cancelled') break
+    }
   },
 
   async cancelCheck(name) {
@@ -377,8 +380,12 @@ export const useStore = create<Store>((set, get) => ({
     const markdown = formatReview(result, snapshot)
     clearTimeout(saveTimer)
     set({ busy: null, submitted: { result, markdown }, drafts: [] })
-    // Persist the cleared drafts *before* the native window exits.
-    await transport.saveState(snapshot, stateOf(get()))
+    // Persist the cleared drafts *before* the native window exits (the native side clears them too).
+    try {
+      await transport.saveState(snapshot, stateOf(get()))
+    } catch {
+      /* never lose the review because of a failed save */
+    }
     await transport.submit(result, markdown)
   },
 }))
