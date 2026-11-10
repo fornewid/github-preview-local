@@ -28,18 +28,30 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -x "$PRV" ] || { echo "prv not found at $PRV (build it, or pass --prv)" >&2; exit 1; }
+PRV="$(cd "$(dirname "$PRV")" && pwd)/$(basename "$PRV")" # the script works in another directory
+# Never act on the repository this is run from (e.g. inside a git hook) and never prompt.
+unset $(git rev-parse --local-env-vars 2>/dev/null) || true
+export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1
+timed() { perl -e 'alarm shift; exec @ARGV' "$@"; } # timed SECONDS command...
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/prv-selftest.XXXXXX")
-trap 'cp "$WORK/out.txt" "${PRV_SELFTEST_KEEP:-/dev/null}" 2>/dev/null; rm -rf "$WORK"' EXIT
+trap 'cp "$WORK/out.txt" "${PRV_SELFTEST_KEEP:-/dev/null}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+TOKEN="31.$$" # the slow check sleeps this long: a unique command line to look for afterwards
 
 # --- Scratch repository: main + a branch with two commits, three local checks on main ---
-git init -q -b main "$WORK/repo"
+git init -q --template= -b main "$WORK/repo"
 cd "$WORK/repo"
 git config user.name "prv selftest"
 git config user.email "selftest@example.invalid"
 git config commit.gpgsign false
+git config core.hooksPath /dev/null # no global hooks in the scratch repository
+touch "$(git rev-parse --git-path prv-selftest)" # prv only runs PRV_SELFTEST=flows where this exists
 initial_commit() {
   printf 'Scratch repository for prv end-to-end tests.\n' > README.md
-  cat > .prv.toml <<'TOML'
+  git add -A && git commit -q -m "Initial commit"
+}
+# The local checks, not committed (whatever the remote has): passing, failing, slow.
+write_checks() {
+  cat > .prv.toml <<TOML
 [[checks]]
 name = "lint"
 run = "echo lint ok"
@@ -50,21 +62,25 @@ run = "echo '1 test failed'; exit 1"
 
 [[checks]]
 name = "slow"
-run = "echo started; sleep 31"
+run = "echo started; sleep $TOKEN"
 TOML
-  git add -A && git commit -q -m "Initial commit"
+  local exclude
+  exclude=$(git rev-parse --git-path info/exclude)
+  mkdir -p "$(dirname "$exclude")" && echo .prv.toml >> "$exclude"
 }
 
 if [ -n "$GH_REPO" ]; then
   REPO_ID="$GH_REPO"
   BRANCH="selftest-$(date +%Y%m%d-%H%M%S)"
   git remote add origin "https://github.com/$GH_REPO.git"
-  if git ls-remote --exit-code -q origin refs/heads/main > /dev/null 2>&1; then
-    git fetch -q origin main && git reset -q --hard origin/main
-  else
-    initial_commit && git push -q origin main
-  fi
-  git fetch -q origin main
+  rc=0
+  timed 60 git ls-remote --exit-code -q origin refs/heads/main > /dev/null || rc=$?
+  case $rc in
+    0) timed 120 git fetch -q origin main && git reset -q --hard origin/main ;;
+    2) initial_commit && timed 120 git push -q origin main ;; # empty repository
+    *) echo "cannot read https://github.com/$GH_REPO (git ls-remote exit $rc)" >&2; exit 1 ;;
+  esac
+  timed 120 git fetch -q origin main
   PATH_PREFIX=""
 else
   REPO_ID="prv-selftest/sample"
@@ -93,6 +109,7 @@ SH
   PATH_PREFIX="$WORK/bin:"
 fi
 git remote set-head origin main
+write_checks
 git checkout -q -b "$BRANCH"
 # Code files (syntax highlighting is checked too); the branch name keeps every run's content new.
 printf "export const a = '%s' // first\n" "$BRANCH" > a.js && git add a.js && git commit -q -m "Add a.js"
@@ -105,18 +122,18 @@ run_round() {
   local head_sha remote_sha pr_url pr_json leftover code
   head_sha=$(git rev-parse HEAD)
   set +e
-  PATH="$PATH_PREFIX$PATH" PRV_SELFTEST=flows perl -e 'alarm 420; exec @ARGV' "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
+  PATH="$PATH_PREFIX$PATH" PRV_SELFTEST=flows timed 600 "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
   code=$?
   set -e
   if [ -n "$GH_REPO" ]; then
-    remote_sha=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+    remote_sha=$(timed 60 git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
     pr_url=$(node -e 'const t=require("fs").readFileSync(process.argv[1],"utf8");const m=/"url":\s*"([^"]+\/pull\/\d+)"/.exec(t);console.log(m?m[1]:"")' "$WORK/out.txt")
-    pr_json=$([ -n "$pr_url" ] && gh pr view "$pr_url" --json number,url,state,isDraft,headRefName,baseRefName,title,headRefOid || echo '{}')
+    pr_json=$([ -n "$pr_url" ] && timed 60 gh pr view "$pr_url" --json number,url,state,isDraft,headRefName,baseRefName,title,headRefOid || echo '{}')
   else
     remote_sha=$(git --git-dir="$WORK/remote.git" rev-parse -q --verify "refs/heads/$BRANCH" || true)
     pr_json='{}'
   fi
-  leftover=$(pgrep -f "sleep 31" || true)
+  leftover=$(pgrep -U "$(id -u)" -f "sleep $TOKEN" || true)
   echo "== round $round"
   ROUND_URL=$(node - "$WORK" "$code" "$head_sha" "$remote_sha" "$leftover" "$REPO_ID" "$BRANCH" "${GH_REPO:+real}" "$pr_json" "$round" "$expect_files" "$expect_url" <<'JS'
 const fs = require('fs')

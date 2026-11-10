@@ -98,6 +98,8 @@ struct AppState {
     opts: Options,
     format: Format,
     selftest: bool,
+    /// A self-test reported and ends the run: no review result on stdout.
+    selftest_reported: AtomicBool,
     loaded_once: AtomicBool,
     current: Mutex<Option<Arc<Current>>>,
     result: Mutex<Option<(serde_json::Value, String)>>,
@@ -292,15 +294,17 @@ fn selftest_log(app: State<'_, AppState>, report: serde_json::Value) {
     let _ = std::io::stdout().flush();
 }
 
-/// End-to-end check used by `PRV_SELFTEST=1 prv`: the UI reports what it rendered.
+/// End-to-end check used by `PRV_SELFTEST=1 prv`: the UI reports what it rendered. Leaves through
+/// the normal exit, which also stops checks still running (exit code 0 when ok, else 3).
 #[tauri::command]
-fn selftest_done(app: State<'_, AppState>, report: serde_json::Value) {
+fn selftest_done(handle: tauri::AppHandle, app: State<'_, AppState>, report: serde_json::Value) {
     if !app.selftest {
         return;
     }
     println!("{}", serde_json::to_string(&report).unwrap_or_default());
     let _ = std::io::stdout().flush();
-    std::process::exit(if report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) { 0 } else { 3 });
+    app.selftest_reported.store(true, Ordering::SeqCst);
+    handle.exit(if report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) { 0 } else { 3 });
 }
 
 /// Browser-like zoom for the window (Cmd/Ctrl + `=` / `-` / `0` in the UI).
@@ -533,11 +537,21 @@ fn run_window(git: Git, opts: Options, format: Format) {
         git.root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
     );
     let selftest = std::env::var_os("PRV_SELFTEST").is_some();
+    let flows = std::env::var("PRV_SELFTEST").as_deref() == Ok("flows");
+    // `flows` clicks Confirm, which pushes and opens a pull request: only in a scratch repository
+    // that scripts/native-selftest.sh prepared (and marked).
+    if flows {
+        let marker = git.line(&["rev-parse", "--git-path", "prv-selftest"]).map(|p| git.root.join(p));
+        if !marker.is_some_and(|p| p.exists()) {
+            fail("PRV_SELFTEST=flows pushes and opens a pull request, so it only runs in a scratch repository prepared by scripts/native-selftest.sh");
+        }
+    }
     let state = AppState {
         git,
         opts,
         format,
         selftest,
+        selftest_reported: AtomicBool::new(false),
         loaded_once: AtomicBool::new(false),
         current: Mutex::new(None),
         result: Mutex::new(None),
@@ -581,17 +595,21 @@ fn run_window(git: Git, opts: Options, format: Format) {
             #[cfg(target_os = "macos")]
             if selftest {
                 // A window that is not on screen (display asleep, another Space) has its WebView
-                // suspended by WebKit, which would stall the self-test's timers.
+                // suspended by WebKit, which would stall the self-test's timers. macOS 14+.
+                use objc2::runtime::NSObjectProtocol;
                 use objc2_web_kit::{WKInactiveSchedulingPolicy, WKWebViewConfiguration};
                 if let Some(mtm) = objc2::MainThreadMarker::new() {
                     let config = unsafe { WKWebViewConfiguration::new(mtm) };
-                    unsafe { config.preferences().setInactiveSchedulingPolicy(WKInactiveSchedulingPolicy::None) };
-                    builder = builder.with_webview_configuration(config);
+                    let prefs = unsafe { config.preferences() };
+                    if prefs.respondsToSelector(objc2::sel!(setInactiveSchedulingPolicy:)) {
+                        unsafe { prefs.setInactiveSchedulingPolicy(WKInactiveSchedulingPolicy::None) };
+                        builder = builder.with_webview_configuration(config);
+                    }
                 }
             }
             if selftest {
                 // `flows` also drives commit ranges, local checks and Confirm (scripts/native-selftest.sh).
-                let mode = if std::env::var("PRV_SELFTEST").as_deref() == Ok("flows") { "\"flows\"" } else { "true" };
+                let mode = if flows { "\"flows\"" } else { "true" };
                 builder = builder.initialization_script(&format!("window.__PRV_SELFTEST__ = {mode};"));
             }
             let w = builder
@@ -619,8 +637,10 @@ fn run_window(git: Git, opts: Options, format: Format) {
                 // Give the runner threads a moment to kill their process trees.
                 std::thread::sleep(Duration::from_millis(400));
             }
-            let result = st.result.lock().ok().and_then(|r| r.clone());
-            print_result(st.format, &result);
+            if !st.selftest_reported.load(Ordering::SeqCst) {
+                let result = st.result.lock().ok().and_then(|r| r.clone());
+                print_result(st.format, &result);
+            }
         }
     });
 }

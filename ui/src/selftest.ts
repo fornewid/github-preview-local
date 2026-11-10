@@ -2,8 +2,8 @@
 //
 //   PRV_SELFTEST=1 prv       render, highlight and zoom, then exit with a report
 //   PRV_SELFTEST=flows prv   also click through a commit range, the local checks and Confirm
-//                            (push + pull request); scripts/native-selftest.sh sets up a scratch
-//                            repository, a local remote and a stand-in `gh` for it
+//                            (push + pull request). Only in a scratch repository prepared by
+//                            scripts/native-selftest.sh (prv refuses otherwise).
 import { canConfirm, useStore } from './store'
 
 type Report = Record<string, unknown>
@@ -105,6 +105,8 @@ async function localChecks(): Promise<Report> {
   await until('Run all', () => withText('button', 'Run all'))
   click(withText('button', 'Run all'), 'Run all')
   const status = (name: string) => st().checks.find((c) => c.name === name)?.status
+  // Run all goes one check at a time; the slow one is last.
+  await until('lint and unit finished', () => ['success', 'failure'].includes(status('lint') ?? '') && ['success', 'failure'].includes(status('unit') ?? ''), 60000)
   await until('slow check running', () => status('slow') === 'running', 30000)
   click(withText('.Checks-item', /slow/), 'slow check')
   await until('Cancel', () => withText('.CheckRun-header button', 'Cancel'))
@@ -134,22 +136,24 @@ async function confirm(): Promise<void> {
   await until('open pull request lookup', () => st().existingPr && !st().existingPr!.loading)
   if (st().existingPr?.error) throw new Error(`pull request lookup failed: ${st().existingPr!.error}`)
   click($('.ReviewForm-submit'), 'Confirm and create pull request')
-  // Success ends the app (the result goes to stdout); a failure stays in the form.
-  await until('publish result', () => $('.ReviewForm-flash'), 120000)
-  throw new Error(`Confirm failed: ${$('.ReviewForm-flash')?.textContent}`)
+  // Success ends the app (the result goes to stdout); a failure is kept in the review draft. The
+  // wait covers prv's own push (300s) and gh (120s) timeouts.
+  await until('publish result', () => st().reviewDraft.error, 450000)
+  throw new Error(`Confirm failed: ${st().reviewDraft.error}`)
 }
 
 export async function runSelftest(mode: true | 'flows') {
-  await sleep(4000)
-  const report = await basic()
-  if (mode !== 'flows' || !report.ok) return invoke('selftest_done', { report })
-  verbose = true
   try {
+    await sleep(4000)
+    const report = await basic()
+    if (mode !== 'flows' || !report.ok) return await invoke('selftest_done', { report })
+    verbose = true
     const range = await commitRange()
     const checks = await localChecks()
     await invoke('selftest_log', { report: { stage: 'flows', range, checks } })
     await confirm()
   } catch (e) {
-    await invoke('selftest_done', { report: { ok: false, stage: 'flows', error: String(e) } })
+    // Every failure ends the run with a report, never a silent hang.
+    await invoke('selftest_done', { report: { ok: false, stage: mode === 'flows' ? 'flows' : 'basic', error: String(e) } }).catch(() => {})
   }
 }
