@@ -167,6 +167,11 @@ npm --prefix ui install && npm --prefix ui run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
 PRV_SELFTEST=1 src-tauri/target/release/prv --no-fetch   # opens the window, reports what rendered, exits
 
+# The native-only features, clicked through in the real window: a commit range, local checks
+# (pass, fail, cancel) and Confirm (push + pull request, then pushing to that open pull request).
+scripts/native-selftest.sh                               # offline: local remote, stand-in `gh`
+scripts/native-selftest.sh --github you/scratch-repo     # real push and pull request (your login)
+
 cd tools/reference && npm install
 node ui-test.mjs path/to/export.html                     # end-to-end checks of the review UI
 ```

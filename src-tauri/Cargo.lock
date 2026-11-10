@@ -2437,6 +2437,8 @@ dependencies = [
  "clap",
  "ctrlc",
  "libc",
+ "objc2",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",

@@ -281,6 +281,17 @@ fn submit_review(handle: tauri::AppHandle, app: State<'_, AppState>, result: ser
     handle.exit(0);
 }
 
+/// `PRV_SELFTEST=flows`: a progress report from the UI that does not end the run (the run ends
+/// the normal way, through Confirm). Ignored outside self-tests.
+#[tauri::command]
+fn selftest_log(app: State<'_, AppState>, report: serde_json::Value) {
+    if !app.selftest {
+        return;
+    }
+    println!("{}", serde_json::to_string(&report).unwrap_or_default());
+    let _ = std::io::stdout().flush();
+}
+
 /// End-to-end check used by `PRV_SELFTEST=1 prv`: the UI reports what it rendered.
 #[tauri::command]
 fn selftest_done(app: State<'_, AppState>, report: serde_json::Value) {
@@ -547,6 +558,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
             submit_review,
             open_in_editor,
             set_zoom,
+            selftest_log,
             selftest_done
         ])
         .setup(move |app| {
@@ -566,8 +578,21 @@ fn run_window(git: Git, opts: Options, format: Format) {
                     }
                     false
                 });
+            #[cfg(target_os = "macos")]
             if selftest {
-                builder = builder.initialization_script("window.__PRV_SELFTEST__ = true;");
+                // A window that is not on screen (display asleep, another Space) has its WebView
+                // suspended by WebKit, which would stall the self-test's timers.
+                use objc2_web_kit::{WKInactiveSchedulingPolicy, WKWebViewConfiguration};
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    let config = unsafe { WKWebViewConfiguration::new(mtm) };
+                    unsafe { config.preferences().setInactiveSchedulingPolicy(WKInactiveSchedulingPolicy::None) };
+                    builder = builder.with_webview_configuration(config);
+                }
+            }
+            if selftest {
+                // `flows` also drives commit ranges, local checks and Confirm (scripts/native-selftest.sh).
+                let mode = if std::env::var("PRV_SELFTEST").as_deref() == Ok("flows") { "\"flows\"" } else { "true" };
+                builder = builder.initialization_script(&format!("window.__PRV_SELFTEST__ = {mode};"));
             }
             let w = builder
                 .title(&title)
