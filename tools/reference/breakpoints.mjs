@@ -143,24 +143,49 @@ const treeOn = (page) =>
   })
 
 async function github() {
-  const ctx = await chromium.launchPersistentContext(path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile'), {
-    channel: 'chrome',
-    headless: true,
-    viewport: { width: 1440, height: 900 },
-    locale: 'en-US',
-    ignoreDefaultArgs: ['--use-mock-keychain'],
-    // Ctrl-C must not close the browser before the file tree is restored (below).
-    handleSIGINT: false,
-    handleSIGTERM: false,
-  })
-  const page = ctx.pages()[0] || (await ctx.newPage())
-  const url = prUrl.replace(/\/(files|changes).*$/, '').replace(/\/$/, '') + '/changes?diff=split'
-  // github.com keeps the file tree's visibility per user: put it back however the run ends (the
-  // side panel is not kept, a reload closes it). Runs once, after the sweep has stopped.
-  let initial = true
-  let restoring
-  const restore = () =>
-    (restoring ??= (async () => {
+  // Registered before Chrome starts: Ctrl-C only sets a flag, the run then stops at its next step
+  // and restores what it changed. A second Ctrl-C quits at once.
+  const onSignal = () => {
+    if (interrupted) process.exit(130)
+    interrupted = true
+    console.error('\ninterrupted: restoring the file tree on github.com… (Ctrl-C again to quit now)')
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+  const stopIfInterrupted = () => {
+    if (interrupted) throw new Error('interrupted')
+  }
+  let ctx
+  try {
+    ctx = await chromium.launchPersistentContext(path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile'), {
+      channel: 'chrome',
+      headless: true,
+      viewport: { width: 1440, height: 900 },
+      locale: 'en-US',
+      ignoreDefaultArgs: ['--use-mock-keychain'],
+      // Our handler above runs instead, so the browser stays open until the tree is restored.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+    })
+    const page = ctx.pages()[0] || (await ctx.newPage())
+    const url = prUrl.replace(/\/(files|changes).*$/, '').replace(/\/$/, '') + '/changes?diff=split'
+    // github.com keeps the file tree's visibility per user: put it back however the run ends (the
+    // side panel is not kept, a reload closes it).
+    let initial = true
+    try {
+      stopIfInterrupted()
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
+      await page.waitForSelector('table', { timeout: 60000 })
+      await page.waitForTimeout(3000)
+      stopIfInterrupted()
+      initial = await treeOn(page)
+      if (!initial) {
+        await page.getByRole('button', { name: 'Expand file tree' }).first().click()
+        await page.waitForTimeout(1200)
+      }
+      await openPanel(page)
+      return await sweep(page)
+    } finally {
       try {
         await page.setViewportSize({ width: 1440, height: 900 })
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
@@ -170,30 +195,12 @@ async function github() {
           await page.getByRole('button', { name: 'Collapse file tree' }).first().click()
           await page.waitForTimeout(1500)
         }
-      } finally {
-        await ctx.close()
+      } catch (e) {
+        console.error(`could not restore the file tree on github.com (${e.message.split('\n')[0]}); check it by hand`)
       }
-    })())
-  const onSignal = () => {
-    if (interrupted) process.exit(130) // second Ctrl-C: give up
-    interrupted = true
-    console.error('\ninterrupted: restoring the file tree on github.com… (Ctrl-C again to quit now)')
-  }
-  process.on('SIGINT', onSignal)
-  process.on('SIGTERM', onSignal)
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
-    await page.waitForSelector('table', { timeout: 60000 })
-    await page.waitForTimeout(3000)
-    initial = await treeOn(page)
-    if (!initial) {
-      await page.getByRole('button', { name: 'Expand file tree' }).first().click()
-      await page.waitForTimeout(1200)
     }
-    await openPanel(page)
-    return await sweep(page)
   } finally {
-    await restore()
+    await ctx?.close().catch(() => {})
     process.removeListener('SIGINT', onSignal)
     process.removeListener('SIGTERM', onSignal)
     if (interrupted) process.exit(130)

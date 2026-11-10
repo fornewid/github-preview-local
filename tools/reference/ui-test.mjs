@@ -301,10 +301,25 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
   assert(await page.locator('.FileTreePane').count() === 0, 'tree in a dialog at 1043px')
   await width(900)
   assert((await dialogs()) === 0 && !(await page.locator('.SidePanel').isVisible()), 'docked panel hidden at 900px')
+  assert((await page.locator('.SidePanel').count()) === 1, 'still mounted while hidden (keeps an edit)')
   assert(await page.getByRole('button', { name: 'Open overview panel' }).isVisible(), 'a hidden panel reads as closed')
   await width(1440)
   assert(await page.locator('.SidePanel').isVisible(), 'docked again at 1440px')
-  await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+  // Hidden, then its toggle: it opens as a dialog, and an edit in progress carries over.
+  await page.locator('.SidePanel').getByRole('button', { name: 'Edit description' }).click()
+  await page.getByRole('textbox', { name: 'Pull request description' }).fill('Draft that must survive')
+  await width(900)
+  await page.getByRole('button', { name: 'Open overview panel' }).click()
+  await settle()
+  assert((await dialogs()) === 1, 'opens as a dialog')
+  assert(
+    (await page.getByRole('dialog').getByRole('textbox', { name: 'Pull request description' }).inputValue()) === 'Draft that must survive',
+    'the draft carried over',
+  )
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+  await closeDialogs()
+  await width(1440)
+  assert((await page.locator('.SidePanel').count()) === 0, 'replaced by the dialog, so closed after it')
   // Opened narrow: a dialog, and it stays one when the window widens.
   await width(900)
   await open()

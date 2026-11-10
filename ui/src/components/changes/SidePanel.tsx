@@ -28,6 +28,12 @@ export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
   const [editing, setEditing] = useState(false)
+  // The description draft lives here: the panel may switch between docked and dialog mid-edit.
+  const [draft, setDraft] = useState('')
+  // Start every edit from the current description (it can change elsewhere, e.g. in Confirm).
+  useEffect(() => {
+    if (editing) setDraft(useStore.getState().prBody)
+  }, [editing])
   const width = useSidePanelWidth((st) => st.width)
   useEffect(() => setEditing(false), [panel])
   if (!panel) return null
@@ -37,7 +43,7 @@ export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?
   )
   const body = (
     <>
-      {panel === 'overview' && <OverviewPanel editing={editing} setEditing={setEditing} />}
+      {panel === 'overview' && <OverviewPanel editing={editing} setEditing={setEditing} body={draft} setBody={setDraft} />}
       {panel === 'comments' && <CommentsPanel />}
       {panel === 'merge' && <MergePanel />}
     </>
@@ -172,14 +178,19 @@ function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: 
   )
 }
 
-function OverviewPanel({ editing, setEditing }: { editing: boolean; setEditing: (v: boolean) => void }) {
+function OverviewPanel({
+  editing,
+  setEditing,
+  body,
+  setBody,
+}: {
+  editing: boolean
+  setEditing: (v: boolean) => void
+  body: string
+  setBody: (v: string) => void
+}) {
   const prBody = useStore((st) => st.prBody)
   const setPr = useStore((st) => st.setPr)
-  const [body, setBody] = useState(prBody)
-  // Start every edit from the current description (it can change elsewhere, e.g. in Confirm).
-  useEffect(() => {
-    if (editing) setBody(useStore.getState().prBody)
-  }, [editing])
   if (editing)
     return (
       <div className="OverviewPanel-edit">
