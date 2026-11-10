@@ -360,7 +360,9 @@ function ReviewButton() {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('[role="menu"]')) openReview(null)
+      if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return
+      // An open menu (e.g. the editor's overflow menu) closes first.
+      if (!document.querySelector('[role="menu"]')) openReview(null)
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)

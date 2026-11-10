@@ -62,17 +62,27 @@ export function CopyButton({
   )
 }
 
+function sanitize(html: string) {
+  DOMPurify.addHook('uponSanitizeElement', (node, data) => {
+    if (data.tagName !== 'input') return
+    const el = node as Element
+    if (el.getAttribute('type') !== 'checkbox') el.remove()
+    else el.setAttribute('disabled', '')
+  })
+  try {
+    return DOMPurify.sanitize(html, {
+      FORBID_ATTR: ['style', 'class', 'id'],
+      FORBID_TAGS: ['style', 'form', 'button', 'select', 'textarea', 'iframe'],
+    })
+  } finally {
+    DOMPurify.removeHook('uponSanitizeElement')
+  }
+}
+
 export function Markdown({ source, className = '' }: { source: string; className?: string }) {
-  // Repository-controlled text (PR templates, commit messages): no inline styles or form controls,
-  // so nothing can be laid over the page's own buttons.
-  const html = useMemo(
-    () =>
-      DOMPurify.sanitize(marked.parse(source, { async: false, gfm: true, breaks: true }) as string, {
-        FORBID_ATTR: ['style'],
-        FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea', 'iframe'],
-      }),
-    [source],
-  )
+  // Repository-controlled text (PR templates, commit messages): no inline styles, page classes or
+  // ids and no form controls (except task list checkboxes), so nothing can pose as the page's UI.
+  const html = useMemo(() => sanitize(marked.parse(source, { async: false, gfm: true, breaks: true }) as string), [source])
   return <div className={`markdown-body ${className}`} dangerouslySetInnerHTML={{ __html: html }} />
 }
 

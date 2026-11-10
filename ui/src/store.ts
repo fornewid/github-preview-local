@@ -292,8 +292,10 @@ export const useStore = create<Store>((set, get) => ({
       return
     }
     if (get().tab !== 'files') get().setTab('files')
-    const event = e === 'CONFIRM' && !canConfirm(get()) ? 'COMMENT' : e
-    set((s) => ({ reviewOpen: true, reviewDraft: event ? { ...s.reviewDraft, event } : s.reviewDraft }))
+    // A kept draft may still say CONFIRM after switching to a commit range.
+    const wanted = e ?? get().reviewDraft.event
+    const event = wanted === 'CONFIRM' && !canConfirm(get()) ? 'COMMENT' : wanted
+    set((s) => ({ reviewOpen: true, reviewDraft: { ...s.reviewDraft, event } }))
     if (event === 'CONFIRM') void get().findPr()
   },
   setReviewDraft: (d) => set((s) => ({ reviewDraft: { ...s.reviewDraft, ...d } })),

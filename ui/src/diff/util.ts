@@ -308,9 +308,19 @@ function ownerAlternatives(pat: string, anchored: boolean): string[] {
 
 const rulesCache = new Map<number, OwnerRule[]>()
 const resultCache = new Map<number, Map<string, Ownership | null>>()
+// The same CODEOWNERS string is passed for every file: hash it once.
+let lastText: string | null = null
+let lastKey = 0
+function keyOf(text: string) {
+  if (text !== lastText) {
+    lastText = text
+    lastKey = hashOf(text)
+  }
+  return lastKey
+}
 
 function parseCodeowners(text: string): OwnerRule[] {
-  const key = hashOf(text)
+  const key = keyOf(text)
   const hit = rulesCache.get(key)
   if (hit) return hit
   const rules: OwnerRule[] = []
@@ -345,10 +355,12 @@ function parseCodeowners(text: string): OwnerRule[] {
         if (lit && !lit.startsWith('*')) rule.anchoredPrefix = lit
       }
       rule.alts = ownerAlternatives(pat, anchored).map(tokenize)
-      rule.needles = pat
-        .replace(/\[[^\]]*\]/g, '/')
-        .split(/[*?/]/)
-        .filter((n) => n.length >= 2)
+      // Escaped patterns (`foo\*bar`) skip the pre-filter rather than unescape it.
+      if (!pat.includes('\\'))
+        rule.needles = pat
+          .replace(/\[[^\]]*\]/g, '/')
+          .split(/[*?/]/)
+          .filter((n) => n.length >= 2)
     }
     rules.push(rule)
   })
@@ -371,14 +383,15 @@ function ruleMatches(r: OwnerRule, path: string, parts: string[]): boolean {
   if (r.needles && !r.needles.every((n) => path.includes(n))) return false
   const targets: string[] = []
   if (!r.dirOnly) targets.push(path)
-  if (!r.directOnly) for (let i = 1; i < parts.length; i++) targets.push(parts.slice(0, i).join('/'))
+  // `dir/*` owns direct children only; `dir/*/` owns everything below the matching directories.
+  if (r.dirOnly || !r.directOnly) for (let i = 1; i < parts.length; i++) targets.push(parts.slice(0, i).join('/'))
   return targets.some((t) => r.alts.some((toks) => matchTokens(toks, t)))
 }
 
 /** Code owners of `path` per GitHub's CODEOWNERS rules (gitignore-style patterns, last match wins). */
 export function codeownersFor(text: string | null | undefined, path: string): Ownership | null {
   if (!text) return null
-  const key = hashOf(text)
+  const key = keyOf(text)
   let cache = resultCache.get(key)
   if (!cache) {
     if (resultCache.size > 8) resultCache.clear()

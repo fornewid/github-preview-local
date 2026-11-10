@@ -683,22 +683,39 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
         return hit;
     }
     let objects = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "objects"])?;
+    let scratch = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "prv"])?;
+    std::fs::create_dir_all(&scratch).ok()?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!("prv-merge-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&tmp).ok()?;
+    // Private, fresh directory inside the repository's git dir (not a shared temp dir).
+    let tmp = std::path::Path::new(&scratch).join(format!("merge-objects-{}-{nanos}", std::process::id()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&tmp).ok()?;
+    // Alternates are separated by ':' (';' on Windows); a C-quoted entry may contain them.
+    let quote = |p: &str| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""));
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let mut alternates = quote(&objects);
+    if let Ok(existing) = std::env::var("GIT_ALTERNATE_OBJECT_DIRECTORIES") {
+        if !existing.is_empty() {
+            alternates = format!("{alternates}{sep}{existing}");
+        }
+    }
     let mut cmd = git.cmd();
     cmd.env("GIT_OBJECT_DIRECTORY", &tmp)
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &objects)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
         .args(["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head]);
     let out = crate::proc::run(cmd, None, std::time::Duration::from_secs(30));
     let _ = std::fs::remove_dir_all(&tmp);
     let out = out.ok()?;
-    let result = if out.timed_out {
-        None
-    } else {
+    if out.timed_out {
+        // Not cached: a slow moment should not stick for the whole session.
+        return None;
+    }
+    let result = {
         match out.code {
             // Output: the tree id, then (on conflicts) the conflicted paths, NUL separated.
             Some(0) => Some(vec![]),
