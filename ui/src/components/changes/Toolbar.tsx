@@ -30,14 +30,14 @@ import { canConfirm, useStore, viewKey } from '../../store'
 import type { Commit, ReviewEvent } from '../../types'
 import { anchorFor, plural, shortDate, viewedKey } from '../../diff/util'
 import { MarkdownEditor } from '../MarkdownEditor'
-import { toolbarOverflow, treeBesideNow, useContentWidthClass, useTreeBeside } from '../../layout'
+import { toolbarOverflow, treeBesideNow, useContentWidthClass, useTreeBeside, useVisiblePanel } from '../../layout'
 
 /** Sticky toolbar above the diffs (new "Files changed" experience). */
 export function ChangesToolbar() {
   const treeVisible = useStore((st) => st.settings.treeVisible)
   const treeDialog = useStore((st) => st.treeDialog)
   const apply = useStore((st) => st.applySettings)
-  const panel = useStore((st) => st.panel)
+  const panel = useVisiblePanel()
   const setPanel = useStore((st) => st.setPanel)
   const drafts = useStore((st) => st.drafts.length)
   const treePane = useTreeBeside()

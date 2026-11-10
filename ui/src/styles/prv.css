@@ -1107,6 +1107,9 @@ h3 {
   background-color: var(--bgColor-default);
   border-left: var(--borderWidth-thin) solid var(--borderColor-default);
 }
+.SidePanel[hidden] {
+  display: none;
+}
 .SidePanel-divider {
   position: relative;
   flex-shrink: 0;

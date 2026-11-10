@@ -19,6 +19,7 @@ import { PageHeader } from '@primer/react/experimental'
 import { useStore, type Tab } from '../store'
 import { copyText, DiffSquares } from './common'
 import { plural } from '../diff/util'
+import { useVisiblePanel } from '../layout'
 
 /** Repository context bar (GitHub's global header without the site navigation). */
 export function AppHeader() {
@@ -98,7 +99,7 @@ export function PullHeader() {
   const s = useStore((st) => st.snapshot)!
   const prTitle = useStore((st) => st.prTitle)
   const setPr = useStore((st) => st.setPr)
-  const panel = useStore((st) => st.panel)
+  const panel = useVisiblePanel()
   const setPanel = useStore((st) => st.setPanel)
   const tab = useStore((st) => st.tab)
   const setTab = useStore((st) => st.setTab)

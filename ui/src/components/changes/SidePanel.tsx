@@ -24,7 +24,7 @@ const PANELS: Array<[Panel, string, typeof InfoIcon]> = [
   ['overview', 'Overview', InfoIcon],
 ]
 
-export function SidePanel({ docked }: { docked: boolean }) {
+export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?: boolean }) {
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
   const [editing, setEditing] = useState(false)
@@ -66,7 +66,7 @@ export function SidePanel({ docked }: { docked: boolean }) {
       />
     )
   return (
-    <aside className="SidePanel" aria-label={title} style={{ ['--side-panel-width' as string]: `${width}px` }}>
+    <aside className="SidePanel" aria-label={title} hidden={hidden} style={{ ['--side-panel-width' as string]: `${width}px` }}>
       <SidePanelDivider width={width} onResizeEnd={setSidePanelWidth} />
       <div className="SidePanel-inner">
         <div className="SidePanel-header">

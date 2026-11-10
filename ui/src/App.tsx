@@ -103,7 +103,8 @@ function Page() {
             )}
           </PageLayout>
         </div>
-        {showPanel && (panelDialog || docked) && <SidePanel docked={docked} />}
+        {/* A docked panel stays mounted while hidden, so an edit in progress survives. */}
+        {showPanel && <SidePanel docked={!panelDialog} hidden={!panelDialog && !wide} />}
       </div>
     </>
   )

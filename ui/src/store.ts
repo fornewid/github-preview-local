@@ -276,7 +276,8 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   setTab: (tab) => {
-    set({ tab })
+    // A dialog panel belongs to the Files page it was opened on.
+    set((s) => (tab !== 'files' && s.panelDialog ? { tab, panel: null, panelDialog: false } : { tab }))
     window.scrollTo({ top: 0 })
   },
 
@@ -298,11 +299,13 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   setPanel: (panel) =>
-    set((s) => ({
-      panel,
-      // Decided when the panel opens (switching panels keeps it), like github.com.
-      panelDialog: !panel ? false : s.panel ? s.panelDialog : !window.matchMedia('(min-width: 1012px)').matches,
-    })),
+    set((s) => {
+      const wide = window.matchMedia('(min-width: 1012px)').matches
+      // A docked panel hidden by a narrow window counts as closed (github.com shows "Open …").
+      const visible = !!s.panel && (s.panelDialog || wide)
+      // Decided when a panel opens; switching between visible panels keeps it.
+      return { panel, panelDialog: !panel ? false : visible ? s.panelDialog : !wide }
+    }),
   setTreeDialog: (treeDialog) => set({ treeDialog }),
   openReview: (e) => {
     if (e === null) {

@@ -67,6 +67,14 @@ export function useMediaQuery(query: string): boolean {
   )
 }
 
+/** The side panel the user sees (a docked one hidden by a narrow window counts as closed). */
+export function useVisiblePanel() {
+  const panel = useStore((st) => st.panel)
+  const dialog = useStore((st) => st.panelDialog)
+  const wide = useMediaQuery(MEDIA.dockedPanel)
+  return panel && (dialog || wide) ? panel : null
+}
+
 /** Whether the file tree belongs beside the diffs now (see MEDIA.treePane). */
 export function useTreeBeside(): boolean {
   const panelDocked = useStore((st) => !!st.panel && st.tab === 'files' && !st.panelDialog)

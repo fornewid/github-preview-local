@@ -300,9 +300,10 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
   await width(1043)
   assert(await page.locator('.FileTreePane').count() === 0, 'tree in a dialog at 1043px')
   await width(900)
-  assert((await dialogs()) === 0 && (await page.locator('.SidePanel').count()) === 0, 'docked panel hidden at 900px')
+  assert((await dialogs()) === 0 && !(await page.locator('.SidePanel').isVisible()), 'docked panel hidden at 900px')
+  assert(await page.getByRole('button', { name: 'Open overview panel' }).isVisible(), 'a hidden panel reads as closed')
   await width(1440)
-  assert(await page.locator('.SidePanel').count() === 1, 'docked again at 1440px')
+  assert(await page.locator('.SidePanel').isVisible(), 'docked again at 1440px')
   await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
   // Opened narrow: a dialog, and it stays one when the window widens.
   await width(900)

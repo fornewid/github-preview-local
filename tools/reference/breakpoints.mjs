@@ -105,8 +105,11 @@ async function openPanel(page) {
   await page.waitForTimeout(1200)
 }
 
+let interrupted = false
+
 async function sweep(page) {
   const at = async (w) => {
+    if (interrupted) throw new Error('interrupted')
     await page.setViewportSize({ width: w, height: 900 })
     await page.evaluate(() => window.scrollTo(0, 0))
     await page.waitForTimeout(300)
@@ -146,35 +149,43 @@ async function github() {
     viewport: { width: 1440, height: 900 },
     locale: 'en-US',
     ignoreDefaultArgs: ['--use-mock-keychain'],
+    // Ctrl-C must not close the browser before the file tree is restored (below).
+    handleSIGINT: false,
+    handleSIGTERM: false,
   })
   const page = ctx.pages()[0] || (await ctx.newPage())
   const url = prUrl.replace(/\/(files|changes).*$/, '').replace(/\/$/, '') + '/changes?diff=split'
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
-  await page.waitForSelector('table', { timeout: 60000 })
-  await page.waitForTimeout(3000)
-  const initial = await treeOn(page)
-  // github.com keeps the file tree's visibility per user: put it back however the run ends.
-  const restore = async () => {
-    try {
-      await page.setViewportSize({ width: 1440, height: 900 })
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
-      await page.waitForSelector('table', { timeout: 60000 })
-      await page.waitForTimeout(2000)
-      if (!initial && (await treeOn(page))) {
-        await page.getByRole('button', { name: 'Collapse file tree' }).first().click()
-        await page.waitForTimeout(1500)
+  // github.com keeps the file tree's visibility per user: put it back however the run ends (the
+  // side panel is not kept, a reload closes it). Runs once, after the sweep has stopped.
+  let initial = true
+  let restoring
+  const restore = () =>
+    (restoring ??= (async () => {
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 })
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await page.waitForSelector('table', { timeout: 60000 })
+        await page.waitForTimeout(2000)
+        if (!initial && (await treeOn(page))) {
+          await page.getByRole('button', { name: 'Collapse file tree' }).first().click()
+          await page.waitForTimeout(1500)
+        }
+      } finally {
+        await ctx.close()
       }
-    } finally {
-      await ctx.close()
-    }
-  }
+    })())
   const onSignal = () => {
-    console.error('\ninterrupted: restoring the file tree on github.com…')
-    restore().finally(() => process.exit(130))
+    if (interrupted) process.exit(130) // second Ctrl-C: give up
+    interrupted = true
+    console.error('\ninterrupted: restoring the file tree on github.com… (Ctrl-C again to quit now)')
   }
-  process.once('SIGINT', onSignal)
-  process.once('SIGTERM', onSignal)
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
   try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
+    await page.waitForSelector('table', { timeout: 60000 })
+    await page.waitForTimeout(3000)
+    initial = await treeOn(page)
     if (!initial) {
       await page.getByRole('button', { name: 'Expand file tree' }).first().click()
       await page.waitForTimeout(1200)
@@ -182,9 +193,10 @@ async function github() {
     await openPanel(page)
     return await sweep(page)
   } finally {
+    await restore()
     process.removeListener('SIGINT', onSignal)
     process.removeListener('SIGTERM', onSignal)
-    await restore()
+    if (interrupted) process.exit(130)
   }
 }
 
