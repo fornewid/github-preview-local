@@ -292,6 +292,15 @@ fn selftest_done(app: State<'_, AppState>, report: serde_json::Value) {
     std::process::exit(if report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) { 0 } else { 3 });
 }
 
+/// Browser-like zoom for the window (Cmd/Ctrl + `=` / `-` / `0` in the UI).
+#[tauri::command]
+fn set_zoom(window: tauri::WebviewWindow, scale: f64) -> Result<(), String> {
+    if !scale.is_finite() {
+        return Err("invalid zoom".into());
+    }
+    window.set_zoom(scale.clamp(0.25, 5.0)).map_err(|e| e.to_string())
+}
+
 /// Opens a changed file in a text editor. Never hands the file to an OS
 /// launcher (which could execute scripts or app bundles from the repository).
 #[tauri::command]
@@ -537,6 +546,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
             publish,
             submit_review,
             open_in_editor,
+            set_zoom,
             selftest_done
         ])
         .setup(move |app| {
@@ -562,7 +572,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
             let w = builder
                 .title(&title)
                 .inner_size(1440.0, 900.0)
-                .min_inner_size(720.0, 480.0)
+                .min_inner_size(320.0, 360.0)
                 .center()
                 .build()?;
             let _ = w.set_focus();

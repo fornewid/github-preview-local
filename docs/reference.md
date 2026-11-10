@@ -24,8 +24,9 @@ page, so the reference is captured with a signed-in Chrome profile (see
 | Page padding | 32px (≥1012px), 24px (≥768px), 16px |
 | PR header | Primer `PageHeader`: title 32px/40px weight 400, number weight 300 muted, edit `IconButton` 32px; actions (*Merge status*) margin-top 8px; description padding-top 8px (`StateLabel` 32px tall, summary muted, `BranchName` accent); navigation padding-top 16px |
 | Tabs | 14px / 22.96px, padding 8px 12px, selected: `--bgColor-default`, 1px border, radius 6px 6px 0 0; `CounterLabel` margin-left 8px; diffstat right, padding-top 12px |
-| Conversation / Commits | centered `container-xl` (1280px including 32px padding) |
-| Side panel (Overview, Comments, Merge status) | `PageLayout.Sidebar`, 484px, sticky top 0, full height; header 49px (padding 8px); actions move above the title while open |
+| Conversation / Commits | centered `container-xl` (1280px including 32px padding); conversation sidebar 320px (256px under 1012px) |
+| Checks | check list a third of the width, details beside it |
+| Side panel (Overview, Comments, Merge status) | `PageLayout.Sidebar`, resizable (*Draggable pane splitter*: drag, arrow keys 3px, double-click resets): `clamp(450px, width, min(768px, max(450px, 100vw − d)))` with width 544px by default, d = 959px from 1280px, else 511px; plus 1px border, 1px divider, 1px → 484px at 1440, 547px from 1503px, 453px at 1280–1409. Sticky top 0, full height; header 49px (padding 8px). The page header runs up to it, the toolbar and diffs stop 16px before it |
 
 ## Files changed
 
@@ -60,6 +61,31 @@ page, so the reference is captured with a signed-in Chrome profile (see
 | Settings menu | *Layout* (Unified / Split) · *Whitespace changes* submenu (Always show / Always hide / Hide for this diff only) · *Minimize comments* (`i`) · *Compact line height* |
 | Commit picker | `Dialog` 480 × 640: *All commits*, *Changes since your last review*, *Select a range of commits* (checkbox list) |
 
+## Widths and zoom
+
+Measured with `tools/reference/breakpoints.mjs` (it finds each threshold to the pixel on
+github.com and on a prv export and prints them side by side; they are identical from 2560px to
+320px). Widths are CSS pixels: browser zoom divides the window width (a 1440px window at 150% is
+960px), and so does the native window's zoom (Cmd/Ctrl + `=` / `-` / `0`, Chrome's levels 25–500%).
+
+| Window | github.com (and prv) |
+|---|---|
+| ≥ 1076px | File tree beside the diffs (page container ≥ 1012px plus 2 × 32px padding) |
+| < 1076px | Tree hidden; the toggle opens a *Files* `Dialog` from the left (640px; fullscreen under 768px), closed by choosing a file. Header actions (*Merge status*) move above the title (`@container (width <= 1011px)`; with the side panel open the header itself is the container) |
+| < 1012px | Page padding 24px; side panel opens as a `Dialog` from the right (640px; fullscreen under 768px); *viewed* word hidden (`0 / 2`); conversation sidebar 256px; checks title truncated at 150px |
+| < 816px | Header and toolbar containers under 768px: *Merge status* → *Status*, *Submit review* → *Review*; tab diffstat hidden (container ≤ 768px) |
+| ≤ 768px | Checks: list above the details |
+| < 768px | Page padding 16px; toolbar dividers hidden; file header: chevron, path, icon-only *Viewed*, kebab — comment, copy, expand-all, stats and CODEOWNERS shield move into the kebab menu (*Comment on this file*, *Copy file name*, *Expand all lines*, *Owned by …*); *Finish your review* fullscreen; conversation: no avatar column (24px avatar in the comment header), sidebar and merge box below the timeline, merge icon hidden; Primer stacks the layout content |
+| toolbar ≤ 544px (window ≤ 576px) | *All commits* moves into the toolbar's *More options* menu (*Comments*, *All commits*, *Settings* ›); settings and comments buttons follow under 544px |
+| ≤ 544px | Commits: no timeline line, the list uses the full width |
+| < 544px | Tab icons hidden; state label above the summary line; commits: SHA and its buttons fold into a kebab (*Copy full SHA for …*) |
+| toolbar ≤ 500px (window ≤ 532px) | Viewed progress hidden |
+| ≤ 335px | github.com's own header overflows horizontally; prv does not |
+| any | Branch names at most 35vw, truncated; title inline so the number and edit button follow its last line; long hunk headers wrap |
+
+The JS side of these thresholds (dialogs, menus) is in `ui/src/layout.ts`; WebKit applies zoom to
+media queries without a `change` event, so prv also re-checks on `resize` and after zooming.
+
 ## Not reproduced on purpose
 
 - github.com's global header and repository navigation (Code, Issues, …): prv shows a small
@@ -67,4 +93,5 @@ page, so the reference is captured with a signed-in Chrome profile (see
 - *Code*, *Preview* (feature preview), Copilot and *Paste, drop, or click to add files*: they act
   on github.com and have no local meaning.
 - File menu items *View file / Edit file / Delete file*: replaced by *Open in editor* and
-  *Copy file path*.
+  *Copy file path*. The narrow commit menu has only *Copy full SHA* (no *View commit details* /
+  *Browse repository at this point*).

@@ -159,7 +159,8 @@ export function PullHeader() {
           aria-expanded={mergeOpen}
           onClick={openMerge}
         >
-          Merge status
+          <span className="PullHeader-mergeLong">Merge status</span>
+          <span className="PullHeader-mergeShort">Status</span>
         </Button>
       </PageHeader.Actions>
       <PageHeader.Description className="PullHeader-description">

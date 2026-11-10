@@ -15,6 +15,7 @@ import {
 } from '@primer/octicons-react'
 import { ActionList, ActionMenu, Button, IconButton, Label, Tooltip } from '@primer/react'
 import { useShallow } from 'zustand/react/shallow'
+import { MEDIA, useMediaQuery } from '../../layout'
 import { useStore, viewKey, type CommentTarget } from '../../store'
 import { parseHunks, splitLines, type DiffLine } from '../../diff/parse'
 import {
@@ -204,6 +205,10 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
     )
 
   const renamed = file.oldPath && file.oldPath !== file.path
+  const commentOnFile = () => {
+    toggleCollapsed(file.path, false)
+    compose({ path: file.path, side: 'RIGHT', line: 0 })
+  }
   return (
     <div ref={ref} className="DiffEntry" id={anchorFor(file.path)} data-path={file.path}>
       <div className="DiffEntry-headerWrapper">
@@ -281,12 +286,22 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
                 variant="invisible"
                 icon={CommentIcon}
                 aria-label="Comment on this file"
-                onClick={() => {
-                  toggleCollapsed(file.path, false)
-                  compose({ path: file.path, side: 'RIGHT', line: 0 })
-                }}
+                className="DiffFileHeader-comment"
+                onClick={commentOnFile}
               />
-              <FileMenu file={file} />
+              <FileMenu
+                file={file}
+                owners={owners ? ownersLabel(owners) : null}
+                onComment={commentOnFile}
+                expand={
+                  expandable && loaded && !collapsed
+                    ? {
+                        label: anyExpanded ? 'Collapse expanded lines' : 'Expand all lines',
+                        run: () => setGaps(file.path, anyExpanded ? undefined : expandAll(gaps), ws),
+                      }
+                    : null
+                }
+              />
             </div>
           </div>
         </div>
@@ -305,9 +320,24 @@ function Placeholder({ children }: { children: ReactNode }) {
   return <div className="DiffPlaceholder">{children}</div>
 }
 
-function FileMenu({ file }: { file: FileDiff }) {
+/**
+ * File kebab menu. Below 768px github.com hides the header's comment, copy and expand buttons,
+ * stats and CODEOWNERS shield, and offers them here instead.
+ */
+function FileMenu({
+  file,
+  owners,
+  onComment,
+  expand,
+}: {
+  file: FileDiff
+  owners: string | null
+  onComment: () => void
+  expand: { label: string; run: () => void } | null
+}) {
   const transport = useStore((st) => st.transport)
   const native = transport?.kind === 'native'
+  const narrow = useMediaQuery(MEDIA.narrow)
   return (
     <ActionMenu>
       <ActionMenu.Anchor>
@@ -315,10 +345,26 @@ function FileMenu({ file }: { file: FileDiff }) {
       </ActionMenu.Anchor>
       <ActionMenu.Overlay align="end">
         <ActionList>
+          {narrow && (
+            <>
+              <ActionList.Item onSelect={onComment}>Comment on this file</ActionList.Item>
+              <ActionList.Divider />
+              <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file name</ActionList.Item>
+              {expand && <ActionList.Item onSelect={expand.run}>{expand.label}</ActionList.Item>}
+            </>
+          )}
           <ActionList.Item disabled={!native || file.status === 'deleted'} onSelect={() => void transport?.openInEditor(file.path)}>
             Open in editor
           </ActionList.Item>
-          <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file path</ActionList.Item>
+          {!narrow && <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file path</ActionList.Item>}
+          {narrow && owners && (
+            <ActionList.Item className="FileMenu-owners">
+              <ActionList.LeadingVisual>
+                <ShieldLockIcon />
+              </ActionList.LeadingVisual>
+              {owners}
+            </ActionList.Item>
+          )}
         </ActionList>
       </ActionMenu.Overlay>
     </ActionMenu>

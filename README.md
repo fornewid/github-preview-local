@@ -10,6 +10,10 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   (*Unified / Split*, *Whitespace changes*, *Minimize comments*, *Compact line height*), expandable
   context, word-level highlights, GitHub's syntax highlighting (`pl-*`), CODEOWNERS, *Overview /
   Comments / Merge status* panels and every Primer theme (light, dark, dimmed, high contrast).
+- **Any window size and zoom**: from a phone-sized 320px window to 4K, the page changes layout at
+  the same widths github.com does (file tree and side panels become dialogs, labels shorten,
+  toolbar controls move into an overflow menu, …). The native window zooms with Cmd/Ctrl + `=` /
+  `-` / `0` like a browser.
 - **Kept in sync with github.com**: measuring tools capture the signed-in page and compare it with
   prv pixel by pixel ([docs/design-sync.md](docs/design-sync.md)).
 - **Same comparison as a pull request**: three-dot diff from the merge base of `origin/<base>`
@@ -77,7 +81,9 @@ prv list-checks             # show configured / auto-detected checks
 ```
 
 Settings from the gear menu (*Unified / Split*, *Whitespace changes*, *Minimize comments* — `i`,
-*Compact line height*) are remembered, like on GitHub. `t` focuses the file filter.
+*Compact line height*) are remembered, like on GitHub. `t` focuses the file filter. The side
+panel can be resized by dragging its edge. Cmd/Ctrl + `=` / `-` / `0` zoom the native window (the
+level is remembered); in a browser (`prv export`) use the browser's zoom.
 
 ### Reviewing
 

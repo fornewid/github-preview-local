@@ -11,7 +11,8 @@
     "dump": "node dump.mjs",
     "primer-version": "node primer-version.mjs",
     "local-states": "node local-states.mjs",
-    "ui-test": "node ui-test.mjs"
+    "ui-test": "node ui-test.mjs",
+    "breakpoints": "node breakpoints.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"

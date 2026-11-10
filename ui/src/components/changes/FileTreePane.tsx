@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FileAddedIcon, FileDiffIcon, FileMovedIcon, FileRemovedIcon, FilterIcon, SearchIcon } from '@primer/octicons-react'
-import { ActionList, ActionMenu, CounterLabel, IconButton, TextInput, TreeView } from '@primer/react'
+import { ActionList, ActionMenu, CounterLabel, Dialog, IconButton, TextInput, TreeView } from '@primer/react'
 import { useStore } from '../../store'
 import { buildTree, type TreeNode } from '../../diff/tree'
 import type { FileDiff } from '../../types'
@@ -49,7 +49,7 @@ function useCurrentFile(paths: string[]) {
   return current
 }
 
-export function FileTreePane({ files, all }: { files: FileDiff[]; all: FileDiff[] }) {
+export function FileTreePane({ files, all, onNavigate }: { files: FileDiff[]; all: FileDiff[]; onNavigate?: () => void }) {
   const text = useStore((st) => st.filter.text)
   const exts = useStore((st) => st.filter.exts)
   const showViewed = useStore((st) => st.filter.showViewed)
@@ -90,7 +90,11 @@ export function FileTreePane({ files, all }: { files: FileDiff[]; all: FileDiff[
             current={current === f.path}
             onSelect={() => {
               useStore.getState().toggleCollapsed(f.path, false)
-              scrollToFile(f.path)
+              if (onNavigate) {
+                // The dialog closes first, then the page scrolls to the file.
+                onNavigate()
+                requestAnimationFrame(() => scrollToFile(f.path))
+              } else scrollToFile(f.path)
             }}
           >
             <TreeView.LeadingVisual>
@@ -114,7 +118,7 @@ export function FileTreePane({ files, all }: { files: FileDiff[]; all: FileDiff[
     })
 
   return (
-    <div className="FileTree" id="pr-file-tree">
+    <div className={`FileTree ${onNavigate ? 'FileTree--dialog' : ''}`} id="pr-file-tree">
       <div className="FileTree-header">
         <TextInput
           id="file-tree-filter"
@@ -163,5 +167,15 @@ export function FileTreePane({ files, all }: { files: FileDiff[]; all: FileDiff[
         )}
       </div>
     </div>
+  )
+}
+
+/** Narrow windows: github.com opens the tree as a "Files" dialog from the left (fullscreen below 768px). */
+export function FileTreeDialog({ files, all }: { files: FileDiff[]; all: FileDiff[] }) {
+  const close = () => useStore.getState().setTreeDialog(false)
+  return (
+    <Dialog title="Files" width="xlarge" position={{ narrow: 'fullscreen', regular: 'left' }} onClose={close} className="FileTreeDialog">
+      <FileTreePane files={files} all={all} onNavigate={close} />
+    </Dialog>
   )
 }

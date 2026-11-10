@@ -1,14 +1,15 @@
-import { Component, useMemo, type ReactNode } from 'react'
+import { Component, useEffect, useMemo, type ReactNode } from 'react'
 import { Button, Flash, PageLayout, ThemeProvider } from '@primer/react'
 import { useStore } from './store'
 import { AppHeader, PullHeader } from './components/PageHeader'
 import { ChangesToolbar, useShortcuts } from './components/changes/Toolbar'
-import { FileTreePane } from './components/changes/FileTreePane'
+import { FileTreeDialog, FileTreePane } from './components/changes/FileTreePane'
 import { DiffList } from './components/changes/DiffEntry'
 import { SidePanel } from './components/changes/SidePanel'
 import { ChecksTab, CommitsTab, ConversationTab } from './components/Tabs'
 import { copyText } from './components/common'
 import { extOf, viewedKey } from './diff/util'
+import { MEDIA, nextZoom, useMediaQuery } from './layout'
 
 /** Keeps a rendering error in one part of the page from blanking the window. */
 export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -66,12 +67,15 @@ function Page() {
   const panel = useStore((st) => st.panel)
   const loading = useStore((st) => st.loading)
   const warnings = useStore((st) => st.snapshot!.warnings)
+  const docked = useMediaQuery(MEDIA.dockedPanel)
   useShortcuts()
+  useZoom()
   const centered = tab === 'conversation' || tab === 'commits'
+  const showPanel = !!panel && tab === 'files'
   return (
     <>
       <AppHeader />
-      <div className={`App-body ${panel && tab === 'files' ? 'has-panel' : ''}`}>
+      <div className={`App-body ${showPanel && docked ? 'has-panel' : ''}`}>
         <div className={`App-main ${centered ? 'App-main--centered' : ''}`}>
           <PageLayout
             containerWidth="full"
@@ -96,7 +100,7 @@ function Page() {
             )}
           </PageLayout>
         </div>
-        {panel && tab === 'files' && <SidePanel />}
+        {showPanel && <SidePanel docked={docked} />}
       </div>
     </>
   )
@@ -107,6 +111,12 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
   const filter = useStore((st) => st.filter)
   const viewed = useStore((st) => st.viewed)
   const treeVisible = useStore((st) => st.settings.treeVisible)
+  const treeDialog = useStore((st) => st.treeDialog)
+  // Wide enough: the tree sits beside the diffs (if shown); otherwise it opens as a dialog.
+  const treePane = useMediaQuery(MEDIA.treePane)
+  useEffect(() => {
+    if (treePane && treeDialog) useStore.getState().setTreeDialog(false)
+  }, [treePane, treeDialog])
   const shown = useMemo(
     () =>
       files.filter((f) => {
@@ -122,7 +132,8 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
       <div className="ChangesToolbar-wrapper">
         <ChangesToolbar />
       </div>
-      {treeVisible && (
+      {!treePane && treeDialog && <FileTreeDialog files={shown} all={files} />}
+      {treePane && treeVisible && (
         <PageLayout.Pane
           position="start"
           aria-label="File tree"
@@ -151,6 +162,37 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
       </PageLayout.Content>
     </>
   )
+}
+
+/** Native window: Cmd/Ctrl + `=` / `-` / `0` zoom like a browser, and the level is kept. */
+function useZoom() {
+  const transport = useStore((st) => st.transport)
+  const zoom = useStore((st) => st.settings.zoom)
+  const native = transport?.kind === 'native'
+  useEffect(() => {
+    if (transport?.kind !== 'native') return
+    transport
+      .setZoom(zoom || 1)
+      // The CSS width changed: let width-dependent parts re-check (WebKit sends no event for zoom).
+      .then(() => setTimeout(() => window.dispatchEvent(new Event('resize')), 50))
+      .catch(() => {})
+  }, [transport, zoom])
+  useEffect(() => {
+    if (!native) return
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      const cur = useStore.getState().settings.zoom || 1
+      let next: number | null = null
+      if (e.code === 'Equal' || e.code === 'NumpadAdd' || e.key === '+' || e.key === '=') next = nextZoom(cur, 1)
+      else if (e.code === 'Minus' || e.code === 'NumpadSubtract' || e.key === '-') next = nextZoom(cur, -1)
+      else if (e.code === 'Digit0' || e.code === 'Numpad0') next = 1
+      if (next === null) return
+      e.preventDefault()
+      useStore.getState().applySettings({ zoom: next })
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [native])
 }
 
 function SubmittedDialog() {

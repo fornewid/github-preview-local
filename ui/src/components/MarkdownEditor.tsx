@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   BoldIcon,
   CodeIcon,
@@ -72,6 +72,14 @@ export function MarkdownEditor({
   const [mode, setMode] = useState<'write' | 'preview'>('write')
   const ref = useRef<HTMLTextAreaElement>(null)
   const id = useId()
+  // Overlays move focus to their first control after mounting (e.g. "Finish your review" in its
+  // fullscreen form); github.com starts in the text box, so take focus back once they are done.
+  useEffect(() => {
+    if (!autoFocus) return
+    const raf = requestAnimationFrame(() => ref.current?.focus())
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const apply = (f: Format) => {
     const el = ref.current

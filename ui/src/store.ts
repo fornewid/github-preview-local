@@ -32,6 +32,8 @@ export interface Settings {
   minimizeComments: boolean
   treeVisible: boolean
   treeWidth: number
+  /** Native window zoom (browsers keep their own). */
+  zoom: number
 }
 
 export interface CommentTarget {
@@ -67,6 +69,7 @@ function loadSettings(): Settings {
     minimizeComments: false,
     treeVisible: true,
     treeWidth: 296,
+    zoom: 1,
   }
   try {
     s = { ...s, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') }
@@ -98,6 +101,8 @@ export interface Store {
   settings: Settings
   tab: Tab
   panel: Panel | null
+  /** The file tree dialog (narrow windows, where the tree is not beside the diffs). */
+  treeDialog: boolean
   /** "Finish your review" overlay is open. */
   reviewOpen: boolean
   /** Review being written; kept while the overlay is closed. */
@@ -127,6 +132,7 @@ export interface Store {
   setTab(t: Tab): void
   applySettings(s: Partial<Settings>, persist?: boolean): void
   setPanel(p: Panel | null): void
+  setTreeDialog(open: boolean): void
   /** Opens the review overlay (optionally preselecting an event) or closes it with `null`. */
   openReview(e: ReviewEvent | null | undefined): void
   setReviewDraft(d: Partial<Store['reviewDraft']>): void
@@ -174,6 +180,7 @@ export const useStore = create<Store>((set, get) => ({
   settings: loadSettings(),
   tab: 'files',
   panel: null,
+  treeDialog: false,
   reviewOpen: false,
   reviewDraft: { body: '', event: 'COMMENT', draft: false, error: null },
   lastReview: null,
@@ -285,6 +292,7 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   setPanel: (panel) => set({ panel }),
+  setTreeDialog: (treeDialog) => set({ treeDialog }),
   openReview: (e) => {
     if (e === null) {
       // Never close while pushing: the result (or error) must stay visible.

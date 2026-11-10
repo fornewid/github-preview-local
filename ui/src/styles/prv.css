@@ -149,10 +149,27 @@ h3 {
 }
 
 /* ---------- Page ---------- */
+.App-body {
+  /* Primer's --pane-max-width-diff: the docked side panel stays this much narrower than the window. */
+  --side-panel-diff: 511px;
+}
+@media (min-width: 1280px) {
+  .App-body {
+    --side-panel-diff: 959px;
+  }
+}
 .App-body.has-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 484px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
+}
+/* github.com: the header runs up to the panel, the toolbar and diffs stop 16px before it. */
+.App-body.has-panel .App-main {
+  padding-right: 0;
+}
+.App-body.has-panel .PullPage--files .ChangesToolbar,
+.App-body.has-panel .PullPage--files .ChangesContent {
+  margin-right: 16px;
 }
 .App-main {
   min-width: 0;
@@ -179,18 +196,17 @@ h3 {
 }
 
 /* ---------- Pull request header (Primer PageHeader) ---------- */
+/* github.com: an inline title, so the number and the edit button follow its last line. */
 .PullHeader-titleWithAction {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
+  display: block;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
-.PullHeader-title {
+.PullHeader .PullHeader-title {
+  display: inline;
   font-size: 32px;
   font-weight: 400;
   line-height: 40px;
-  margin-top: 1px;
-  word-break: break-word;
 }
 .PullHeader-titleText {
   font-weight: 400;
@@ -199,6 +215,8 @@ h3 {
   display: inline-flex;
   align-items: flex-start;
   height: 40px;
+  vertical-align: top;
+  white-space: nowrap;
 }
 .PullHeader-number {
   padding-left: 8px;
@@ -219,14 +237,6 @@ h3 {
 }
 .PullHeader .PullHeader-actions {
   margin-top: 8px;
-}
-/* With a side panel open github.com moves the header actions above the title. */
-.App-body.has-panel .PullHeader .PullHeader-actions {
-  grid-area: context-area;
-  grid-row: 1;
-  justify-content: flex-start;
-  margin: 0 0 8px;
-  padding-left: 0;
 }
 .PullHeader-mergeStatus.status-success [data-component='leadingVisual'] {
   color: var(--fgColor-success);
@@ -280,6 +290,7 @@ h3 {
   border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
 }
 .TabNav-list {
+  position: relative; /* keeps the counters' visually hidden text inside the scroll area */
   display: flex;
   margin-bottom: -1px;
   overflow-x: auto;
@@ -729,6 +740,7 @@ h3 {
 .diff-text-cell.hunk {
   display: flex;
   align-items: center;
+  min-width: 0; /* long function context wraps instead of widening narrow windows */
   padding: 0 20px !important;
   font-size: 12px;
   line-height: 20px;
@@ -1084,14 +1096,67 @@ h3 {
 }
 
 /* ---------- Side panel ---------- */
+/* Primer PageLayout.Sidebar as github.com configures it: 1px border + 1px divider (with the drag
+   handle) + the panel, clamp(450px, width, min(768px, max(450px, 100vw - diff))), 1px at the end. */
 .SidePanel {
   position: sticky;
   top: 0;
   display: flex;
-  flex-direction: column;
   height: 100vh;
+  padding-right: 1px;
   background-color: var(--bgColor-default);
   border-left: var(--borderWidth-thin) solid var(--borderColor-default);
+}
+.SidePanel-divider {
+  position: relative;
+  flex-shrink: 0;
+  width: 1px;
+  background-color: var(--borderColor-default);
+}
+.SidePanel-handle {
+  position: absolute;
+  inset: 0 -4px;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.SidePanel-handle::before {
+  position: absolute;
+  inset: 0;
+  content: '';
+  background-color: var(--bgColor-neutral-muted);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.SidePanel-handle:hover::before,
+.SidePanel-handle[data-dragging]::before {
+  opacity: 1;
+}
+.SidePanel-handle:focus-visible {
+  outline: 2px solid var(--focus-outlineColor);
+  outline-offset: -2px;
+}
+.SidePanel-inner {
+  display: flex;
+  flex-direction: column;
+  width: clamp(450px, var(--side-panel-width, 544px), min(768px, max(450px, 100vw - var(--side-panel-diff))));
+  min-width: 0;
+  height: 100%;
+}
+/* Narrower windows: the panel opens as a dialog (Primer Dialog, right or fullscreen). */
+.SidePanelDialog-headerInner {
+  display: flex;
+}
+.SidePanelDialog-headerContent {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  padding: 6px 8px;
+}
+.SidePanelDialog-body {
+  flex-grow: 1;
+  overflow: auto;
 }
 .SidePanel-header {
   display: flex;
@@ -1251,9 +1316,10 @@ h3 {
   padding-top: 24px;
   padding-bottom: 40px;
 }
+/* github.com: sidebar 320px, 256px under 1012px, below the timeline under 768px. */
 .Conversation {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 296px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 24px;
   align-items: start;
 }
@@ -1474,10 +1540,9 @@ h3 {
   flex: 1;
   min-width: 0;
 }
+/* Inline, like github.com: the "…" button follows the title's last line. */
 .CommitRow-titleLine {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
 }
 .CommitRow-title {
   font-size: 16px;
@@ -1487,6 +1552,8 @@ h3 {
 .CommitRow-ellipsis {
   display: inline-flex;
   align-items: center;
+  margin-left: 8px;
+  vertical-align: middle;
   padding: 0 4px;
   height: 12px;
   color: var(--fgColor-default);
@@ -1548,9 +1615,10 @@ h3 {
 .Checks-headerSpacer {
   flex: 1;
 }
+/* github.com: the check list takes a third of the width; stacked at 768px and below. */
 .Checks-layout {
   display: grid;
-  grid-template-columns: 459px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   min-height: 220px;
   background-color: var(--bgColor-muted);
 }
@@ -1781,4 +1849,230 @@ h3 {
 /* Primer's portal layer must sit above the sticky toolbar and file headers. */
 #__primerPortalRoot__ > div {
   z-index: 100 !important;
+}
+
+/* ======================================================================
+   Widths and zoom (github.com, measured; docs/reference.md "Widths and zoom").
+   Thresholds are CSS pixels, so browser zoom and the native window's zoom
+   (Cmd/Ctrl + = / - / 0) follow them too. JS-side counterparts: src/layout.ts.
+   ====================================================================== */
+
+/* Pull request header: github.com queries its page container (or the header itself when the side
+   panel is open). The header is the container here; it has that width in both cases. */
+.PullHeader {
+  container-type: inline-size;
+}
+.PullHeader-mergeShort {
+  display: none;
+}
+@container (width <= 1011px) {
+  .PullHeader [data-component='TitleArea'] {
+    grid-area: 2 / 1 / auto / -1;
+    min-width: 0;
+  }
+  .PullHeader .PullHeader-actions {
+    grid-area: 1 / 1 / auto / -1;
+    justify-content: flex-start;
+    margin-top: 0;
+    margin-bottom: 16px;
+    padding-left: 0;
+  }
+}
+@container (width < 768px) {
+  .PullHeader-mergeLong {
+    display: none;
+  }
+  .PullHeader-mergeShort {
+    display: inline;
+  }
+}
+@container (width <= 768px) {
+  .TabNav-extra {
+    display: none;
+  }
+}
+@media (min-width: 1012px) {
+  .PullHeader-summary {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+}
+@media (width < 544px) {
+  .PullHeader-meta {
+    flex-direction: column;
+  }
+  .TabNav-icon {
+    display: none;
+  }
+}
+.PullHeader-summary {
+  overflow: hidden;
+}
+/* Branch names: at most 35% of the window, then truncated (github.com). */
+.PullHeader-branches [data-component='BranchName'] {
+  display: block;
+  max-width: 35vw;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toolbar: its own container. Below 768px the labels shorten, at 544px controls move into the
+   overflow menu (Toolbar.tsx renders the menu at the same widths), at 500px the progress goes. */
+.ChangesToolbar {
+  container-type: inline-size;
+}
+.ReviewButton-short {
+  display: none;
+}
+@container (width < 768px) {
+  .ReviewButton-long {
+    display: none;
+  }
+  .ReviewButton-short {
+    display: inline;
+  }
+}
+/* (Two classes: Primer's button styles would otherwise win.) */
+@container (width <= 544px) {
+  .ChangesToolbar .CommitPicker-button {
+    display: none;
+  }
+}
+@container (width < 544px) {
+  .ChangesToolbar .ChangesToolbar-settings,
+  .ChangesToolbar .ChangesToolbar-comments {
+    display: none;
+  }
+}
+@container (width <= 500px) {
+  .ViewedProgress {
+    display: none;
+  }
+}
+@media (width < 1012px) {
+  .ViewedProgress-label {
+    display: none;
+  }
+}
+
+/* Primer's narrow range (< 768px). */
+@media (max-width: calc(48rem - 0.02px)) {
+  /* Primer stacks the layout content in a column here; the toolbar keeps its own height. */
+  .ChangesToolbar {
+    flex: none;
+  }
+  .ChangesToolbar-divider {
+    display: none;
+  }
+  /* File header: chevron, path, an icon-only Viewed button and the menu (which takes the rest). */
+  .DiffFileHeader-owner,
+  .DiffFileHeader-copy,
+  .DiffFileHeader-expandAll,
+  .DiffFileHeader-stat,
+  .DiffFileHeader-comment {
+    display: none !important;
+  }
+  .DiffFileHeader-viewed [data-component='text'] {
+    display: none;
+  }
+  /* "Finish your review" fills the screen; the form fills the overlay. */
+  .ReviewOverlay .ReviewForm {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .ReviewOverlay .ReviewForm-body {
+    flex: 1;
+    max-height: none;
+  }
+  .AppHeader-right {
+    display: none;
+  }
+}
+.AppHeader-context-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* File tree as a dialog (windows under 1076px): Primer Dialog body provides the 16px padding. */
+.FileTree--dialog {
+  padding-top: 0;
+}
+.FileTree--dialog .FileTree-header {
+  padding: 0 0 16px;
+}
+.FileTree--dialog .FileTree-scrollable {
+  padding: 0;
+  overflow: visible;
+}
+
+/* Conversation, Commits and Checks tabs. */
+.TimelineComment-headerAvatar,
+.CommitRow-menu {
+  display: none;
+}
+@media (width < 1012px) {
+  .Conversation {
+    grid-template-columns: minmax(0, 1fr) 256px;
+  }
+}
+@media (max-width: calc(48rem - 0.02px)) {
+  .Conversation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The avatar column goes; the author's avatar moves into the comment header. */
+  .TimelineComment,
+  .TimelineItem {
+    margin-left: 0;
+  }
+  .TimelineComment-avatar,
+  .MergeBox-icon {
+    display: none;
+  }
+  .TimelineComment-headerAvatar {
+    display: inline-flex;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+}
+@media (max-width: 768px) {
+  .Checks-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .Checks-sidebar {
+    border-right: 0;
+    border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
+  }
+}
+@media (width < 544px) {
+  .CommitRow .CommitRow-actions {
+    display: none;
+  }
+  .CommitRow .CommitRow-menu {
+    display: flex;
+    align-items: flex-start;
+  }
+}
+@media (max-width: 544px) {
+  /* github.com drops the timeline line and lets the commit list use the full width. */
+  .Commits-group::before {
+    display: none;
+  }
+  .Commits-list {
+    margin-left: -40px;
+  }
+}
+.Checks-headerTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (width < 1012px) {
+  .Checks-headerTitle {
+    max-width: 150px;
+  }
 }

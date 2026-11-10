@@ -34,8 +34,23 @@ createTransport()
     // `PRV_SELFTEST=1 prv`: report what was rendered through the native IPC path, then exit.
     setTimeout(async () => {
       const s = useStore.getState()
+      // Zoom like Cmd+= does (not saved): the page must lay out for the smaller CSS width.
+      const base = window.innerWidth
+      s.applySettings({ zoom: 1.5 }, false)
+      await new Promise((r) => setTimeout(r, 1200))
+      // 1440px / 1.5 = 960px: the file tree must have left the side (it opens as a dialog there).
+      const zoom = { base, zoomed: window.innerWidth, treePane: !!document.querySelector('.FileTreePane') }
+      s.applySettings({ zoom: 1 }, false)
+      await new Promise((r) => setTimeout(r, 600))
       const report = {
-        ok: !s.error && !!s.snapshot && document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length > 0,
+        ok:
+          !s.error &&
+          !!s.snapshot &&
+          document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length > 0 &&
+          Math.abs(zoom.zoomed - base / 1.5) < 2 &&
+          (base / 1.5 >= 1076 || !zoom.treePane) &&
+          window.innerWidth === base,
+        zoom,
         error: s.error,
         files: s.snapshot?.files.length ?? 0,
         rows: document.querySelectorAll('.DiffTable tr').length,

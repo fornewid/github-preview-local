@@ -49,6 +49,15 @@ node local-states.mjs ../../.ref/prv.html ../../.ref/prv-states
 python3 compare.py ../../.ref/gh-states ../../.ref/prv-states ../../.ref/out --align-gh 261.5 --align-prv 226
 ```
 
+`breakpoints.mjs` checks the other dimension, window width: it finds every width at which the
+page changes layout (tree and panels turning into dialogs, shortened labels, overflow menu, compact
+file headers, …) on github.com and on the export, and prints both columns; any `✗` row needs a
+change in `ui/src/styles/prv.css` (the "Widths and zoom" section) or `ui/src/layout.ts`:
+
+```bash
+node breakpoints.mjs $PR ../../.ref/prv.html --from 2560 --to 320
+```
+
 `compare.py` aligns both captures at the pull request toolbar (pass its top in CSS px for each
 side: github.com has a taller global header) and writes side-by-side (`sbs-*.png`) and difference
 (`diff-*.png`) images with the share of differing pixels. Text that is different by nature (title,

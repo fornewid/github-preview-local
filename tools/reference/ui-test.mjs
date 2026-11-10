@@ -1,6 +1,7 @@
 // End-to-end checks of the review UI on a prv export (static transport), with the local Chrome:
 // comments (line, file, edit), settings (layout, whitespace, line height, minimize), expanders,
-// viewed, panels, commit picker, file tree filter and review submission.
+// viewed, panels, commit picker, file tree filter, review submission, and the layout from 320px
+// to 2560px (file tree and side panel dialogs, side panel width, overflow menu, compact headers).
 //
 //   node ui-test.mjs <preview.html>
 import { chromium } from 'playwright-core'
@@ -210,6 +211,150 @@ await check('submit a review: request changes with both comments', async () => {
   assert(md.includes('Changes requested'), 'headline')
   assert(md.includes('(whole file)') && md.includes('line 18 (old/deleted side)'), 'both comments')
   assert(md.includes('Please address these.'), 'summary')
+})
+
+// ---------------- Widths (github.com's responsive behaviour, docs/reference.md) ----------------
+await page.goto(url, { waitUntil: 'load' })
+await page.evaluate(() => {
+  localStorage.clear()
+  localStorage.setItem('prv:settings', JSON.stringify({ diffView: 'split', compact: true, treeVisible: true }))
+})
+await page.goto(url, { waitUntil: 'load' })
+await page.waitForTimeout(1500)
+const width = async (w) => {
+  await page.setViewportSize({ width: w, height: 900 })
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await settle(500)
+}
+const dialogs = () => page.locator('[role="dialog"]').count()
+const closeDialogs = async () => {
+  // A tooltip on the focused button takes the first Escape (Primer).
+  for (let i = 0; i < 3 && (await dialogs()); i++) {
+    await page.keyboard.press('Escape')
+    await settle(300)
+  }
+}
+
+await check('no horizontal overflow from 320px to 2560px', async () => {
+  for (const w of [2560, 1920, 1440, 1100, 1024, 900, 767, 600, 375, 320]) {
+    await width(w)
+    const sw = await page.evaluate(() => document.documentElement.scrollWidth)
+    assert(sw <= w, `${w}px: page is ${sw}px wide`)
+  }
+})
+
+await check('under 1076px the file tree opens as a "Files" dialog and closes on selection', async () => {
+  await width(1100)
+  assert(await page.locator('.FileTreePane').count() === 1, 'tree beside the diffs at 1100px')
+  await width(900)
+  assert(await page.locator('.FileTreePane').count() === 0, 'no tree pane at 900px')
+  await page.getByRole('button', { name: 'Expand file tree' }).click()
+  await settle()
+  const box = await page.getByRole('dialog', { name: 'Files' }).boundingBox()
+  assert(box && box.x === 0 && Math.round(box.width) === 640, `left sheet 640px, got ${JSON.stringify(box)}`)
+  await page.getByRole('dialog').getByRole('treeitem', { name: 'BasicReadMoreTextLayoutTest.kt' }).click()
+  await settle(800)
+  assert((await dialogs()) === 0, 'dialog closed')
+  assert((await page.evaluate(() => window.scrollY)) > 0, 'scrolled to the file')
+})
+
+await check('side panel: docked width follows the window, a dialog under 1012px', async () => {
+  const open = async () => {
+    await page.getByRole('button', { name: 'Open overview panel' }).click()
+    await settle()
+  }
+  for (const [w, expected] of [[1920, 547], [1440, 484], [1300, 453]]) {
+    await width(w)
+    await open()
+    const got = await page.locator('.SidePanel').evaluate((e) => Math.round(e.getBoundingClientRect().width))
+    assert(got === expected, `${w}px: panel ${got}px, expected ${expected}px`)
+    await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+    await settle(300)
+  }
+  await width(1920)
+  await open()
+  const handle = page.locator('.SidePanel').getByRole('slider', { name: 'Draggable pane splitter' })
+  await handle.focus()
+  await page.keyboard.press('ArrowLeft')
+  await settle(300)
+  assert((await handle.getAttribute('aria-valuenow')) === '541', 'arrow key resizes by 3px')
+  await handle.dblclick()
+  await settle(300)
+  assert((await handle.getAttribute('aria-valuenow')) === '544', 'double-click resets to 544px')
+  await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+  await width(900)
+  await open()
+  assert((await dialogs()) === 1 && (await page.locator('.SidePanel').count()) === 0, 'dialog at 900px')
+  await closeDialogs()
+  assert((await dialogs()) === 0, 'Escape closes it')
+})
+
+await check('labels shorten under 816px and controls move into "More options" at 544px', async () => {
+  await width(816)
+  assert(await page.getByRole('button', { name: 'Submit review' }).isVisible(), 'Submit review at 816px')
+  await width(815)
+  assert(await page.getByRole('button', { name: 'Review', exact: true }).isVisible(), 'Review at 815px')
+  assert(await page.getByRole('button', { name: 'Status', exact: true }).isVisible(), 'Status at 815px')
+  await width(375)
+  const toolbar = page.locator('.ChangesToolbar')
+  assert(!(await toolbar.getByRole('button', { name: 'All commits' }).isVisible()), 'All commits moved')
+  await toolbar.getByRole('button', { name: 'More options' }).click()
+  await settle()
+  const items = await page.getByRole('menuitem').allInnerTexts()
+  assert(['Comments', 'All commits', 'Settings'].every((t) => items.some((i) => i.includes(t))), `menu: ${items.join(', ')}`)
+  await page.getByRole('menuitem', { name: 'All commits' }).click()
+  await settle()
+  assert(await page.getByRole('dialog', { name: 'Select commits to view' }).isVisible(), 'commit picker from the menu')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await settle(300)
+})
+
+await check('under 768px: compact file header, its menu offers the hidden actions, fullscreen review', async () => {
+  await width(700)
+  const header = page.locator('.DiffFileHeader').first()
+  assert(!(await header.getByRole('button', { name: 'Comment on this file' }).isVisible()), 'comment button hidden')
+  await header.getByRole('button', { name: 'More options' }).click()
+  await settle()
+  await page.getByRole('menuitem', { name: 'Comment on this file' }).click()
+  await settle()
+  assert(await page.getByText('Add a comment on this file').isVisible(), 'file comment form from the menu')
+  await page.getByRole('button', { name: 'Cancel' }).first().click()
+  await settle(300)
+  await width(500)
+  await page.getByRole('button', { name: 'Review', exact: true }).click()
+  await settle(700)
+  const box = await page.locator('.ReviewOverlay').boundingBox()
+  assert(box && box.x === 0 && Math.round(box.width) === 500, `fullscreen review, got ${JSON.stringify(box)}`)
+  assert(await page.evaluate(() => document.activeElement?.tagName === 'TEXTAREA'), 'starts in the text box')
+  await page.keyboard.press('Escape')
+  await settle(300)
+})
+
+await check('native views (fake bridge): checks list beside the log, stacked at 768px and below', async () => {
+  const native = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+  await native.addInitScript({ path: new URL('./fake-native.js', import.meta.url).pathname })
+  const p = await native.newPage()
+  p.on('pageerror', (e) => errors.push(e.message))
+  await p.goto('file://' + path.resolve(file), { waitUntil: 'load' })
+  await p.waitForTimeout(1500)
+  await p.getByRole('link', { name: /^Checks/ }).click()
+  await p.waitForTimeout(500)
+  const layout = () =>
+    p.evaluate(() => {
+      const side = document.querySelector('.Checks-sidebar').getBoundingClientRect()
+      const main = document.querySelector('.Checks-main').getBoundingClientRect()
+      return { side: Math.round(side.width), stacked: main.top >= side.bottom - 1 }
+    })
+  let l = await layout()
+  assert(!l.stacked && l.side === Math.round((1440 - 64) / 3), `1440px: ${JSON.stringify(l)}`)
+  await p.setViewportSize({ width: 769, height: 900 })
+  await p.waitForTimeout(300)
+  assert(!(await layout()).stacked, 'side by side at 769px')
+  await p.setViewportSize({ width: 768, height: 900 })
+  await p.waitForTimeout(300)
+  l = await layout()
+  assert(l.stacked, `stacked at 768px: ${JSON.stringify(l)}`)
+  await native.close()
 })
 
 console.log(results.join('\n'))

@@ -7,14 +7,15 @@ import {
   EllipsisIcon,
   GitCommitIcon,
   GitPullRequestIcon,
+  KebabHorizontalIcon,
   PlayIcon,
   StopIcon,
   SyncIcon,
   XCircleFillIcon,
 } from '@primer/octicons-react'
-import { Button, Label } from '@primer/react'
+import { ActionList, ActionMenu, Button, IconButton, Label } from '@primer/react'
 import { canConfirm, useStore } from '../store'
-import { Avatar, CopyButton, Markdown } from './common'
+import { Avatar, CopyButton, Markdown, copyText } from './common'
 import { MarkdownEditor } from './MarkdownEditor'
 import { ChecksStatusIcon, useChecksSummary } from './PageHeader'
 import { commitLine } from './changes/Toolbar'
@@ -63,7 +64,10 @@ export function ConversationTab() {
           </span>
           <div className="TimelineComment-box">
             <div className="TimelineComment-header">
-              <span>
+              <span className="TimelineComment-author">
+                <span className="TimelineComment-headerAvatar">
+                  <Avatar name={s.author} size={24} />
+                </span>
                 <strong>{s.author}</strong> commented
               </span>
               <span className="TimelineComment-headerActions">
@@ -264,6 +268,19 @@ function CommitRow({ c }: { c: Commit }) {
       <div className="CommitRow-actions">
         <code className="CommitRow-sha">{c.short}</code>
         <CopyButton text={c.sha} label="Copy full SHA" />
+      </div>
+      {/* Under 544px github.com folds the SHA and its buttons into a menu. */}
+      <div className="CommitRow-menu">
+        <ActionMenu>
+          <ActionMenu.Anchor>
+            <IconButton variant="invisible" icon={KebabHorizontalIcon} aria-label="Commit actions" />
+          </ActionMenu.Anchor>
+          <ActionMenu.Overlay align="end">
+            <ActionList>
+              <ActionList.Item onSelect={() => void copyText(c.sha)}>Copy full SHA for {c.short}</ActionList.Item>
+            </ActionList>
+          </ActionMenu.Overlay>
+        </ActionMenu>
       </div>
     </li>
   )

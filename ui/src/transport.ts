@@ -37,6 +37,8 @@ export interface Transport {
   publish(req: PublishRequest): Promise<PublishResult>
   submit(result: ReviewResult, markdown: string): Promise<void>
   openInEditor(path: string, line?: number): Promise<void>
+  /** Zooms the native window like a browser (no-op in a browser, which zooms by itself). */
+  setZoom(scale: number): Promise<void>
 }
 
 declare global {
@@ -85,6 +87,7 @@ function createNative(): Transport {
     publish: (req) => invoke<PublishResult>('publish', { req }),
     submit: (result, markdown) => invoke<void>('submit_review', { result, markdown }),
     openInEditor: (path, line) => invoke<void>('open_in_editor', { path, line: line ?? null }),
+    setZoom: (scale) => invoke<void>('set_zoom', { scale }),
   }
 }
 
@@ -119,6 +122,7 @@ function createStatic(data: StaticData): Transport {
     },
     submit: async () => {},
     openInEditor: async () => {},
+    setZoom: async () => {},
   }
 }
 

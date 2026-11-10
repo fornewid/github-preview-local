@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertIcon,
   CheckCircleFillIcon,
@@ -10,12 +10,13 @@ import {
   TriangleDownIcon,
   XIcon,
 } from '@primer/octicons-react'
-import { ActionList, ActionMenu, Button, IconButton, SegmentedControl } from '@primer/react'
+import { ActionList, ActionMenu, Button, Dialog, IconButton, SegmentedControl } from '@primer/react'
 import { canConfirm, useStore, type Panel } from '../../store'
 import { Avatar, Markdown } from '../common'
 import { MarkdownEditor } from '../MarkdownEditor'
 import { ChecksStatusIcon, useChecksSummary } from '../PageHeader'
 import { anchorFor, plural } from '../../diff/util'
+import { clampSidePanel, SIDE_PANEL, sidePanelMax } from '../../layout'
 
 const PANELS: Array<[Panel, string, typeof InfoIcon]> = [
   ['comments', 'Comments', CommentDiscussionIcon],
@@ -23,48 +24,169 @@ const PANELS: Array<[Panel, string, typeof InfoIcon]> = [
   ['overview', 'Overview', InfoIcon],
 ]
 
-export function SidePanel() {
+export function SidePanel({ docked }: { docked: boolean }) {
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
   const [editing, setEditing] = useState(false)
+  const [width, setWidth] = useState(storedWidth.get)
   useEffect(() => setEditing(false), [panel])
   if (!panel) return null
   const [, title, Icon] = PANELS.find(([k]) => k === panel)!
+  const editButton = panel === 'overview' && !editing && (
+    <IconButton variant="invisible" icon={PencilIcon} aria-label="Edit description" onClick={() => setEditing(true)} />
+  )
+  const body = (
+    <>
+      {panel === 'overview' && <OverviewPanel editing={editing} setEditing={setEditing} />}
+      {panel === 'comments' && <CommentsPanel />}
+      {panel === 'merge' && <MergePanel />}
+    </>
+  )
+  // Narrower windows: a dialog from the right edge (fullscreen below 768px), titled like the panel.
+  if (!docked)
+    return (
+      <Dialog
+        title={title}
+        width="xlarge"
+        position={{ narrow: 'fullscreen', regular: 'right' }}
+        onClose={() => setPanel(null)}
+        className="SidePanelDialog"
+        renderHeader={({ dialogLabelId }) => (
+          <Dialog.Header>
+            <div className="SidePanelDialog-headerInner">
+              <div className="SidePanelDialog-headerContent">
+                <Dialog.Title id={dialogLabelId}>{title}</Dialog.Title>
+              </div>
+              {editButton}
+              <Dialog.CloseButton onClose={() => setPanel(null)} />
+            </div>
+          </Dialog.Header>
+        )}
+        renderBody={() => <div className="SidePanelDialog-body">{body}</div>}
+      />
+    )
   return (
-    <aside className="SidePanel" aria-label={title}>
-      <div className="SidePanel-header">
-        <ActionMenu>
-          <ActionMenu.Anchor>
-            <Button variant="invisible" leadingVisual={Icon} trailingVisual={TriangleDownIcon} className="SidePanel-switch">
-              {title}
-            </Button>
-          </ActionMenu.Anchor>
-          <ActionMenu.Overlay>
-            <ActionList selectionVariant="single">
-              {PANELS.map(([k, label, I]) => (
-                <ActionList.Item key={k} selected={k === panel} onSelect={() => setPanel(k)}>
-                  <ActionList.LeadingVisual>
-                    <I />
-                  </ActionList.LeadingVisual>
-                  {label}
-                </ActionList.Item>
-              ))}
-            </ActionList>
-          </ActionMenu.Overlay>
-        </ActionMenu>
-        <div className="SidePanel-headerActions">
-          {panel === 'overview' && !editing && (
-            <IconButton variant="invisible" icon={PencilIcon} aria-label="Edit description" onClick={() => setEditing(true)} />
-          )}
-          <IconButton variant="invisible" icon={XIcon} aria-label={`Close ${title.toLowerCase()} panel`} onClick={() => setPanel(null)} />
+    <aside className="SidePanel" aria-label={title} style={{ ['--side-panel-width' as string]: `${width}px` }}>
+      <SidePanelDivider
+        width={width}
+        onResizeEnd={(w) => {
+          storedWidth.set(w)
+          setWidth(w)
+        }}
+      />
+      <div className="SidePanel-inner">
+        <div className="SidePanel-header">
+          <ActionMenu>
+            <ActionMenu.Anchor>
+              <Button variant="invisible" leadingVisual={Icon} trailingVisual={TriangleDownIcon} className="SidePanel-switch">
+                {title}
+              </Button>
+            </ActionMenu.Anchor>
+            <ActionMenu.Overlay>
+              <ActionList selectionVariant="single">
+                {PANELS.map(([k, label, I]) => (
+                  <ActionList.Item key={k} selected={k === panel} onSelect={() => setPanel(k)}>
+                    <ActionList.LeadingVisual>
+                      <I />
+                    </ActionList.LeadingVisual>
+                    {label}
+                  </ActionList.Item>
+                ))}
+              </ActionList>
+            </ActionMenu.Overlay>
+          </ActionMenu>
+          <div className="SidePanel-headerActions">
+            {editButton}
+            <IconButton variant="invisible" icon={XIcon} aria-label={`Close ${title.toLowerCase()} panel`} onClick={() => setPanel(null)} />
+          </div>
         </div>
-      </div>
-      <div className="SidePanel-body">
-        {panel === 'overview' && <OverviewPanel editing={editing} setEditing={setEditing} />}
-        {panel === 'comments' && <CommentsPanel />}
-        {panel === 'merge' && <MergePanel />}
+        <div className="SidePanel-body">{body}</div>
       </div>
     </aside>
+  )
+}
+
+/** The docked panel's width, kept across sessions (github.com keeps it per user). */
+const storedWidth = {
+  get(): number {
+    const v = Number(localStorage.getItem(SIDE_PANEL.storageKey))
+    return Number.isFinite(v) && v > 0 ? v : SIDE_PANEL.default
+  },
+  set(v: number) {
+    try {
+      localStorage.setItem(SIDE_PANEL.storageKey, String(Math.round(v)))
+    } catch {
+      /* storage may be unavailable for file:// pages */
+    }
+  },
+}
+
+/**
+ * Drag handle on the panel's left edge (Primer's "Draggable pane splitter"): drag, arrow keys
+ * (3px steps) or double-click to reset. CSS clamps the width the way github.com clamps it; the
+ * handle mirrors that for its ARIA values. Dragging writes the CSS variable directly and commits
+ * once, like Primer, so the panel content does not re-render on every pointer move.
+ */
+function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: (w: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [, rerender] = useState(0)
+  useEffect(() => {
+    // The clamp depends on the window width.
+    const onResize = () => rerender((n) => n + 1)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const now = Math.round(clampSidePanel(width))
+  const preview = (w: number) => {
+    const aside = ref.current?.closest<HTMLElement>('.SidePanel')
+    aside?.style.setProperty('--side-panel-width', `${clampSidePanel(w)}px`)
+    ref.current?.setAttribute('aria-valuenow', String(Math.round(clampSidePanel(w))))
+  }
+  return (
+    <div className="SidePanel-divider">
+      <div
+        ref={ref}
+        className="SidePanel-handle"
+        role="slider"
+        tabIndex={0}
+        aria-label="Draggable pane splitter"
+        aria-valuemin={SIDE_PANEL.min}
+        aria-valuemax={sidePanelMax()}
+        aria-valuenow={now}
+        aria-valuetext={`Pane width ${now} pixels`}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return
+          e.preventDefault()
+          const el = e.currentTarget
+          el.setPointerCapture(e.pointerId)
+          el.dataset.dragging = 'true'
+          const startX = e.clientX
+          const start = now
+          let last = start
+          const move = (ev: PointerEvent) => {
+            // The panel is at the end: moving left makes it wider.
+            last = start + (startX - ev.clientX)
+            preview(last)
+          }
+          const end = () => {
+            delete el.dataset.dragging
+            el.removeEventListener('pointermove', move)
+            el.removeEventListener('pointerup', end)
+            el.removeEventListener('lostpointercapture', end)
+            onResizeEnd(clampSidePanel(last))
+          }
+          el.addEventListener('pointermove', move)
+          el.addEventListener('pointerup', end)
+          el.addEventListener('lostpointercapture', end)
+        }}
+        onKeyDown={(e) => {
+          if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
+          e.preventDefault()
+          onResizeEnd(clampSidePanel(now + (e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -3 : 3)))
+        }}
+        onDoubleClick={() => onResizeEnd(SIDE_PANEL.default)}
+      />
+    </div>
   )
 }
 
