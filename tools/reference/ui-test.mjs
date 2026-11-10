@@ -171,8 +171,36 @@ await check('file tree filter', async () => {
   await page.getByRole('textbox', { name: 'Filter files…' }).fill('')
 })
 
-await check('submit a review: request changes with both comments', async () => {
+await check('CODEOWNERS shield label', async () => {
+  const owner = first().locator('.DiffFileHeader-owner')
+  if (!(await owner.count())) return
+  const label = await owner.getAttribute('aria-label')
+  assert(/^Owned by .+ \(from CODEOWNERS line \d+\)$/.test(label ?? ''), `label ${label}`)
+})
+
+await check('Confirm is disabled without publishing (static export)', async () => {
+  await page.getByRole('button', { name: 'Merge status' }).click()
+  await settle()
+  assert(await page.locator('.MergePanel').getByRole('button', { name: /Confirm/ }).isDisabled(), 'merge panel confirm disabled')
+  await page.getByRole('button', { name: 'Close merge status panel' }).first().click()
+})
+
+await check('review draft survives closing the overlay', async () => {
   await page.getByRole('button', { name: 'Submit review' }).click()
+  await settle()
+  await page.getByRole('textbox', { name: 'Review body' }).fill('Draft kept')
+  await page.keyboard.press('Escape')
+  await settle()
+  await page.getByRole('button', { name: 'Submit review' }).click()
+  await settle()
+  assert((await page.getByRole('textbox', { name: 'Review body' }).inputValue()) === 'Draft kept', 'draft restored')
+  assert(await page.getByRole('radio', { name: 'Confirm' }).isDisabled(), 'confirm radio disabled')
+  await page.keyboard.press('Escape')
+  await settle()
+})
+
+await check('submit a review: request changes with both comments', async () => {
+  if (!(await page.locator('.ReviewForm').isVisible())) await page.locator('.ReviewButton').click()
   await settle()
   await page.getByRole('textbox', { name: 'Review body' }).fill('Please address these.')
   await page.getByRole('radio', { name: 'Request changes' }).check()

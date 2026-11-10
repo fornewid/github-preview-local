@@ -109,9 +109,10 @@ export function PullHeader() {
     setPr(draft.trim() || s.title, null)
     setEditing(false)
   }
+  const mergeOpen = tab === 'files' && panel === 'merge'
   const openMerge = () => {
     if (tab !== 'files') setTab('files')
-    setPanel(panel === 'merge' ? null : 'merge')
+    setPanel(mergeOpen ? null : 'merge')
   }
   return (
     <PageHeader role="banner" aria-label="Pull request header" className="PullHeader">
@@ -155,7 +156,7 @@ export function PullHeader() {
         <Button
           className={`PullHeader-mergeStatus status-${checks.status}`}
           leadingVisual={() => <ChecksStatusIcon status={checks.status} />}
-          aria-expanded={panel === 'merge'}
+          aria-expanded={mergeOpen}
           onClick={openMerge}
         >
           Merge status

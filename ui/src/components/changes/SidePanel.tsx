@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertIcon,
   CheckCircleFillIcon,
@@ -11,7 +11,7 @@ import {
   XIcon,
 } from '@primer/octicons-react'
 import { ActionList, ActionMenu, Button, IconButton, SegmentedControl } from '@primer/react'
-import { useStore, type Panel } from '../../store'
+import { canConfirm, useStore, type Panel } from '../../store'
 import { Avatar, Markdown } from '../common'
 import { MarkdownEditor } from '../MarkdownEditor'
 import { ChecksStatusIcon, useChecksSummary } from '../PageHeader'
@@ -27,6 +27,7 @@ export function SidePanel() {
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
   const [editing, setEditing] = useState(false)
+  useEffect(() => setEditing(false), [panel])
   if (!panel) return null
   const [, title, Icon] = PANELS.find(([k]) => k === panel)!
   return (
@@ -71,6 +72,10 @@ function OverviewPanel({ editing, setEditing }: { editing: boolean; setEditing: 
   const prBody = useStore((st) => st.prBody)
   const setPr = useStore((st) => st.setPr)
   const [body, setBody] = useState(prBody)
+  // Start every edit from the current description (it can change elsewhere, e.g. in Confirm).
+  useEffect(() => {
+    if (editing) setBody(useStore.getState().prBody)
+  }, [editing])
   if (editing)
     return (
       <div className="OverviewPanel-edit">
@@ -167,7 +172,14 @@ function MergePanel() {
   const runAll = useStore((st) => st.runAllChecks)
   const setTab = useStore((st) => st.setTab)
   const openReview = useStore((st) => st.openReview)
+  const range = useStore((st) => st.range)
+  const existing = useStore((st) => st.existingPr)
+  const findPr = useStore((st) => st.findPr)
+  const confirmable = canConfirm({ transport, range })
   const summary = useChecksSummary()
+  useEffect(() => {
+    if (confirmable) void findPr()
+  }, [confirmable, findPr])
   const running = checks.some((c) => c.status === 'running' || c.status === 'queued')
   const idle = checks.filter((c) => c.status === 'idle').length
   const title =
@@ -193,7 +205,7 @@ function MergePanel() {
       ? 'Add a .prv.toml to define checks.'
       : 'Open this preview with prv to run them.'
   const conflicts = s.conflicts
-  const pr = s.existingPr
+  const pr = existing?.pr ?? s.existingPr
   return (
     <div className="MergePanel">
       <button type="button" className="MergePanel-row MergePanel-row--link" onClick={() => setTab('checks')}>
@@ -241,13 +253,17 @@ function MergePanel() {
         </span>
       </div>
       <div className="MergePanel-actions">
-        <Button variant="primary" disabled={!transport.capabilities.publish} onClick={() => openReview('CONFIRM')}>
+        <Button variant="primary" disabled={!confirmable} onClick={() => openReview('CONFIRM')}>
           {pr ? `Confirm and push to #${pr.number}` : 'Confirm and create pull request'}
         </Button>
         <p className="MergePanel-note">
-          {transport.capabilities.publish
-            ? `Confirm pushes ${s.head.name} and ${pr ? 'updates the open pull request' : `opens a pull request into ${s.base.name}`}.`
-            : 'Publishing is available in the native window (`prv`).'}
+          {!transport.capabilities.publish
+            ? 'Publishing is available in the native window (`prv`).'
+            : range.from
+              ? 'Switch back to all commits to confirm.'
+              : existing?.error
+                ? `Publishing is blocked: ${existing.error.split('\n')[0]}`
+                : `Confirm pushes ${s.head.name} and ${pr ? 'updates the open pull request' : `opens a pull request into ${s.base.name}`}.`}
         </p>
         <p className="MergePanel-note">
           Not ready?{' '}

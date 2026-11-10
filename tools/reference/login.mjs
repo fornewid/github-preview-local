@@ -13,7 +13,10 @@ import path from 'node:path'
 
 export const DEFAULT_PROFILE = path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile')
 const profile = process.argv[2] || DEFAULT_PROFILE
-fs.mkdirSync(profile, { recursive: true })
+// The profile holds a GitHub session: keep it private to this user.
+fs.mkdirSync(profile, { recursive: true, mode: 0o700 })
+fs.chmodSync(profile, 0o700)
+fs.chmodSync(path.dirname(profile), 0o700)
 
 // The installed Google Chrome (the same browser playwright's `channel: 'chrome'` drives).
 const chrome =

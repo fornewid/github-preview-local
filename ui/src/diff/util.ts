@@ -269,49 +269,138 @@ export interface Ownership {
   line: number
 }
 
-const ownersCache = new Map<number, Array<{ toks: Tok[][]; dirOnly: boolean; directOnly: boolean; owners: string[]; line: number }>>()
+interface OwnerRule {
+  owners: string[]
+  line: number
+  /** Only directories match (`docs/`): files below them are owned. */
+  dirOnly: boolean
+  /** `dir/*`: direct children only, not deeper paths. */
+  directOnly: boolean
+  /** Cheap pre-checks before running the glob matcher. */
+  literal?: string
+  anchoredPrefix?: string
+  suffix?: string
+  /** Literal pieces every matching path contains. */
+  needles?: string[]
+  alts: Tok[][]
+}
 
-function parseCodeowners(text: string) {
+const MAX_RULE_ALTERNATIVES = 8
+
+// Pattern alternatives per gitignore rules: "a/**/b" also matches "a/b", a leading "**/" also matches at the root.
+function ownerAlternatives(pat: string, anchored: boolean): string[] {
+  let alts = [pat]
+  while (alts.some((a) => a.includes('/**/')) && alts.length < MAX_RULE_ALTERNATIVES) {
+    alts = alts.flatMap((a) => {
+      const i = a.indexOf('/**/')
+      return i < 0 ? [a] : [a.slice(0, i) + '/\u0000' + a.slice(i + 4), a.slice(0, i) + '/' + a.slice(i + 4)]
+    })
+  }
+  alts = alts.map((a) => a.replaceAll('\u0000', '**/'))
+  const out: string[] = []
+  for (const a of alts) {
+    out.push(a)
+    if (a.startsWith('**/')) out.push(a.slice(3))
+    else if (!anchored) out.push('**/' + a)
+  }
+  return [...new Set(out)]
+}
+
+const rulesCache = new Map<number, OwnerRule[]>()
+const resultCache = new Map<number, Map<string, Ownership | null>>()
+
+function parseCodeowners(text: string): OwnerRule[] {
   const key = hashOf(text)
-  const hit = ownersCache.get(key)
+  const hit = rulesCache.get(key)
   if (hit) return hit
-  const rules: Array<{ toks: Tok[][]; dirOnly: boolean; directOnly: boolean; owners: string[]; line: number }> = []
+  const rules: OwnerRule[] = []
   text.split(/\r?\n/).forEach((raw, i) => {
     const line = raw.trim()
     if (!line || line.startsWith('#')) return
-    const [pat0, ...rest] = line.split(/\s+/)
-    let pat = pat0.replace(/^\\#/, '#')
+    const tokens = line.split(/\s+/)
+    let pat = tokens[0].replace(/^\\#/, '#')
     if (pat.length > 300) return
-    const owners = rest.filter((o) => !o.startsWith('#'))
-    const dirOnly = pat.endsWith('/')
+    // Everything from the first `#` token on is a comment.
+    const rest = tokens.slice(1)
+    const hash = rest.findIndex((t) => t.startsWith('#'))
+    const owners = hash < 0 ? rest : rest.slice(0, hash)
+    const dirOnly = pat.endsWith('/') && pat !== '/'
     pat = pat.replace(/\/+$/, '')
-    const anchored = pat.startsWith('/') || pat.includes('/')
-    pat = pat.replace(/^\/+/, '')
-    if (!pat) pat = '**'
-    const pats = anchored ? [pat] : [pat, '**/' + pat]
-    rules.push({ toks: pats.map(tokenize), dirOnly, directOnly: pat.endsWith('/*'), owners, line: i + 1 })
+    let anchored = pat.startsWith('/') || pat.includes('/')
+    const directOnly = pat.endsWith('/*')
+    pat = pat.replace(/^\/+/, '') || '**'
+    // `**/name` is the same as an unanchored `name`.
+    if (pat.startsWith('**/') && !pat.slice(3).includes('/')) {
+      pat = pat.slice(3)
+      anchored = false
+    }
+    const wild = /[*?[\\]/.test(pat)
+    const rule: OwnerRule = { owners, line: i + 1, dirOnly, directOnly, alts: [] }
+    if (!wild && !anchored) rule.literal = pat
+    else if (!wild) rule.anchoredPrefix = pat
+    else if (!anchored && /^\*[^*?[\\/]+$/.test(pat)) rule.suffix = pat.slice(1)
+    else {
+      if (anchored) {
+        const lit = pat.slice(0, pat.search(/[*?[\\]/))
+        if (lit && !lit.startsWith('*')) rule.anchoredPrefix = lit
+      }
+      rule.alts = ownerAlternatives(pat, anchored).map(tokenize)
+      rule.needles = pat
+        .replace(/\[[^\]]*\]/g, '/')
+        .split(/[*?/]/)
+        .filter((n) => n.length >= 2)
+    }
+    rules.push(rule)
   })
-  if (ownersCache.size > 8) ownersCache.clear()
-  ownersCache.set(key, rules)
+  if (rulesCache.size > 8) rulesCache.clear()
+  rulesCache.set(key, rules)
   return rules
+}
+
+function ruleMatches(r: OwnerRule, path: string, parts: string[]): boolean {
+  // Candidates: the file itself and every parent directory (a matching directory owns its files).
+  const segs = r.dirOnly ? parts.slice(0, -1) : parts
+  if (r.literal !== undefined) return segs.includes(r.literal)
+  if (r.suffix !== undefined) return segs.some((s) => s.endsWith(r.suffix!))
+  if (r.anchoredPrefix !== undefined && !r.alts.length) {
+    // Literal anchored path: the path itself or one of its directories.
+    const p = r.anchoredPrefix
+    return (path === p && !r.dirOnly) || path.startsWith(p + '/')
+  }
+  if (r.anchoredPrefix && !path.startsWith(r.anchoredPrefix)) return false
+  if (r.needles && !r.needles.every((n) => path.includes(n))) return false
+  const targets: string[] = []
+  if (!r.dirOnly) targets.push(path)
+  if (!r.directOnly) for (let i = 1; i < parts.length; i++) targets.push(parts.slice(0, i).join('/'))
+  return targets.some((t) => r.alts.some((toks) => matchTokens(toks, t)))
 }
 
 /** Code owners of `path` per GitHub's CODEOWNERS rules (gitignore-style patterns, last match wins). */
 export function codeownersFor(text: string | null | undefined, path: string): Ownership | null {
   if (!text) return null
-  try {
-    const parts = path.split('/')
-    const dirs = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))
-    let found: Ownership | null = null
-    for (const r of parseCodeowners(text)) {
-      // A pattern that matches a directory owns everything below it (except `dir/*`).
-      const targets = r.dirOnly ? dirs : r.directOnly ? [path] : [path, ...dirs]
-      if (targets.some((t) => r.toks.some((toks) => matchTokens(toks, t)))) found = { owners: r.owners, line: r.line }
-    }
-    return found && found.owners.length ? found : null
-  } catch {
-    return null
+  const key = hashOf(text)
+  let cache = resultCache.get(key)
+  if (!cache) {
+    if (resultCache.size > 8) resultCache.clear()
+    cache = new Map()
+    resultCache.set(key, cache)
   }
+  if (cache.has(path)) return cache.get(path)!
+  let found: Ownership | null = null
+  try {
+    const rules = parseCodeowners(text)
+    const parts = path.split('/')
+    for (let i = rules.length - 1; i >= 0; i--) {
+      if (ruleMatches(rules[i], path, parts)) {
+        found = rules[i].owners.length ? { owners: rules[i].owners, line: rules[i].line } : null
+        break
+      }
+    }
+  } catch {
+    found = null
+  }
+  cache.set(path, found)
+  return found
 }
 
 export function ownersLabel(o: Ownership) {

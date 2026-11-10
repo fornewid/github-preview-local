@@ -25,7 +25,7 @@ import {
   TextInput,
 } from '@primer/react'
 import { KeybindingHint } from '@primer/react/experimental'
-import { useStore, viewKey } from '../../store'
+import { canConfirm, useStore, viewKey } from '../../store'
 import type { Commit, ReviewEvent } from '../../types'
 import { anchorFor, plural, shortDate, viewedKey } from '../../diff/util'
 import { MarkdownEditor } from '../MarkdownEditor'
@@ -353,10 +353,18 @@ export { commitLine }
 /* ---------------- Submit review ---------------- */
 
 function ReviewButton() {
-  const reviewOpen = useStore((st) => st.reviewOpen)
+  const open = useStore((st) => st.reviewOpen)
   const openReview = useStore((st) => st.openReview)
-  const open = reviewOpen != null
-  const setOpen = (v: boolean) => openReview(v ? 'COMMENT' : null)
+  const setOpen = (v: boolean) => openReview(v ? undefined : null)
+  // Primer's own Escape handling does not always fire after the overlay was reopened.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.querySelector('[role="menu"]')) openReview(null)
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [open, openReview])
   return (
     <AnchoredOverlay
       open={open}
@@ -372,12 +380,12 @@ function ReviewButton() {
         </Button>
       )}
     >
-      {open && <ReviewForm initial={reviewOpen!} onClose={() => setOpen(false)} />}
+      {open && <ReviewForm onClose={() => setOpen(false)} />}
     </AnchoredOverlay>
   )
 }
 
-function ReviewForm({ initial, onClose }: { initial: ReviewEvent; onClose: () => void }) {
+function ReviewForm({ onClose }: { onClose: () => void }) {
   const s = useStore((st) => st.snapshot)!
   const transport = useStore((st) => st.transport)!
   const drafts = useStore((st) => st.drafts)
@@ -390,19 +398,19 @@ function ReviewForm({ initial, onClose }: { initial: ReviewEvent; onClose: () =>
   const existing = useStore((st) => st.existingPr)
   const findPr = useStore((st) => st.findPr)
   const range = useStore((st) => st.range)
-  const [event, setEvent] = useState<ReviewEvent>(initial)
-  const [body, setBody] = useState('')
-  useEffect(() => {
-    if (initial === 'CONFIRM') void findPr()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-  const [draft, setDraft] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { body, event, draft, error } = useStore((st) => st.reviewDraft)
+  const setReviewDraft = useStore((st) => st.setReviewDraft)
+  const setBody = (v: string) => setReviewDraft({ body: v })
+  const setEvent = (v: ReviewEvent) => setReviewDraft({ event: v })
+  const setDraft = (v: boolean) => setReviewDraft({ draft: v })
+  const setError = (v: string | null) => setReviewDraft({ error: v })
   const canPublish = transport.capabilities.publish
+  const confirmable = canConfirm({ transport, range })
   const failed = checks.filter((c) => c.status === 'failure')
   const notRun = checks.filter((c) => c.status === 'idle')
   const pr = existing?.pr ?? s.existingPr
-  const blocked = !!busy || (event === 'CONFIRM' && (!!existing?.loading || !!existing?.error))
+  const blocked =
+    !!busy || (event === 'CONFIRM' && (!confirmable || !!existing?.loading || !!existing?.error))
 
   const doSubmit = async () => {
     if (blocked) return
@@ -440,7 +448,7 @@ function ReviewForm({ initial, onClose }: { initial: ReviewEvent; onClose: () =>
             <FormControl.Label>Comment</FormControl.Label>
             <FormControl.Caption>Submit general feedback without explicit approval.</FormControl.Caption>
           </FormControl>
-          <FormControl disabled={!canPublish || !!range.from}>
+          <FormControl disabled={!confirmable}>
             <Radio
               value="CONFIRM"
               checked={event === 'CONFIRM'}

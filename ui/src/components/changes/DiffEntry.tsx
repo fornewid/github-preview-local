@@ -130,7 +130,8 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   const anyExpanded = Object.values(gapState).some((g) => g.top + g.bottom > 0)
   const patchLines = useMemo(() => hunks.reduce((a, h) => a + h.lines.length, 0), [hunks])
   const tabSize = tabSizeFor(editorconfig, file.path)
-  const owners = useMemo(() => codeownersFor(codeowners, file.path), [codeowners, file.path])
+  // Computed once the file comes near the viewport (CODEOWNERS can have thousands of rules).
+  const owners = useMemo(() => (visible ? codeownersFor(codeowners, file.path) : null), [visible, codeowners, file.path])
   const modeChanged =
     file.oldMode && file.newMode && file.oldMode !== file.newMode && file.status !== 'added' && file.status !== 'deleted'
   const renders =

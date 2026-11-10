@@ -8,8 +8,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const [, , prUrl, outDir = 'out', scheme = 'light', profileArg] = process.argv
-if (!prUrl) {
+const [, , prUrl, outDir, scheme = 'light', profileArg] = process.argv
+// Captures hold your signed-in page: write them only where you choose (e.g. .ref/, ignored by git).
+if (!prUrl || !outDir) {
   console.error('usage: node states.mjs <https://github.com/o/r/pull/N> <outDir> [light|dark] [profileDir]')
   process.exit(1)
 }

@@ -29,7 +29,7 @@ function wrap(before: string, after = before): Format {
 
 function prefixLines(prefix: (i: number) => string): Format {
   return ({ text, start, end }) => {
-    const ls = text.lastIndexOf('\n', start - 1) + 1
+    const ls = start === 0 ? 0 : text.lastIndexOf('\n', start - 1) + 1
     const block = text.slice(ls, end)
     const lines = block.split('\n').map((l, i) => prefix(i) + l)
     const joined = lines.join('\n')

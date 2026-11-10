@@ -63,7 +63,16 @@ export function CopyButton({
 }
 
 export function Markdown({ source, className = '' }: { source: string; className?: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(source, { async: false, gfm: true, breaks: true }) as string), [source])
+  // Repository-controlled text (PR templates, commit messages): no inline styles or form controls,
+  // so nothing can be laid over the page's own buttons.
+  const html = useMemo(
+    () =>
+      DOMPurify.sanitize(marked.parse(source, { async: false, gfm: true, breaks: true }) as string, {
+        FORBID_ATTR: ['style'],
+        FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea', 'iframe'],
+      }),
+    [source],
+  )
   return <div className={`markdown-body ${className}`} dangerouslySetInnerHTML={{ __html: html }} />
 }
 

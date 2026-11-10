@@ -80,6 +80,11 @@ function loadSettings(): Settings {
   return s
 }
 
+/** Confirm (push + pull request) needs the native window and the full branch, not a commit range. */
+export function canConfirm(s: Pick<Store, 'transport' | 'range'>) {
+  return !!s.transport?.capabilities.publish && !s.range.from
+}
+
 /** `from..to` for a commit range, '' for all changes. */
 export function viewKey(range: SnapshotQuery) {
   return range.from ? `${range.from.slice(0, 7)}..${(range.to ?? range.from).slice(0, 7)}` : ''
@@ -93,8 +98,10 @@ export interface Store {
   settings: Settings
   tab: Tab
   panel: Panel | null
-  /** Open "Finish your review" overlay, with the event to preselect. */
-  reviewOpen: ReviewEvent | null
+  /** "Finish your review" overlay is open. */
+  reviewOpen: boolean
+  /** Review being written; kept while the overlay is closed. */
+  reviewDraft: { body: string; event: ReviewEvent; draft: boolean; error: string | null }
   lastReview: PersistedState['lastReview']
   range: SnapshotQuery
   filter: { exts: string[] | null; showViewed: boolean; showDeleted: boolean; text: string }
@@ -120,7 +127,9 @@ export interface Store {
   setTab(t: Tab): void
   applySettings(s: Partial<Settings>, persist?: boolean): void
   setPanel(p: Panel | null): void
-  openReview(e: ReviewEvent | null): void
+  /** Opens the review overlay (optionally preselecting an event) or closes it with `null`. */
+  openReview(e: ReviewEvent | null | undefined): void
+  setReviewDraft(d: Partial<Store['reviewDraft']>): void
   setFilter(f: Partial<Store['filter']>): void
   toggleCollapsed(path: string, value?: boolean): void
   setGaps(path: string, gaps: Record<number, GapState> | undefined, whitespace: boolean): void
@@ -165,7 +174,8 @@ export const useStore = create<Store>((set, get) => ({
   settings: loadSettings(),
   tab: 'files',
   panel: null,
-  reviewOpen: null,
+  reviewOpen: false,
+  reviewDraft: { body: '', event: 'COMMENT', draft: false, error: null },
   lastReview: null,
   range: {},
   filter: { exts: null, showViewed: true, showDeleted: true, text: '' },
@@ -275,10 +285,18 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   setPanel: (panel) => set({ panel }),
-  openReview: (reviewOpen) => {
-    if (reviewOpen && get().tab !== 'files') get().setTab('files')
-    set({ reviewOpen })
+  openReview: (e) => {
+    if (e === null) {
+      // Never close while pushing: the result (or error) must stay visible.
+      if (!get().busy) set({ reviewOpen: false })
+      return
+    }
+    if (get().tab !== 'files') get().setTab('files')
+    const event = e === 'CONFIRM' && !canConfirm(get()) ? 'COMMENT' : e
+    set((s) => ({ reviewOpen: true, reviewDraft: event ? { ...s.reviewDraft, event } : s.reviewDraft }))
+    if (event === 'CONFIRM') void get().findPr()
   },
+  setReviewDraft: (d) => set((s) => ({ reviewDraft: { ...s.reviewDraft, ...d } })),
 
   setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
 
@@ -400,6 +418,7 @@ export const useStore = create<Store>((set, get) => ({
   async submit(event, body, publish) {
     const { transport, snapshot, drafts, prTitle, prBody } = get()
     if (!transport || !snapshot) return
+    if (event === 'CONFIRM' && !canConfirm(get())) throw new Error('Confirm needs the native window and all commits selected.')
     let pub: ReviewResult['publish'] = null
     if (event === 'CONFIRM' && publish) {
       set({ busy: 'Pushing branch and opening pull request…' })
@@ -427,6 +446,7 @@ export const useStore = create<Store>((set, get) => ({
       submitted: { result, markdown },
       drafts: [],
       lastReview: { head: snapshot.head.sha, at: new Date().toISOString() },
+      reviewDraft: { body: '', event: 'COMMENT', draft: false, error: null },
     })
     // Persist the cleared drafts *before* the native window exits (the native side clears them too).
     try {

@@ -624,7 +624,8 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     let codeowners = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
         .iter()
         .find_map(|p| blob_text(git, &base_sha, p).map(|t| (p.to_string(), t)));
-    let conflicts = if range.from.is_none() { merge_conflicts(git, &base_sha, &head_sha) } else { None };
+    // Committed changes only: uncommitted work is not part of the merge.
+    let conflicts = if range.from.is_none() && !opts.uncommitted { merge_conflicts(git, &base_sha, &head_sha) } else { None };
     let snapshot = Snapshot {
         repo: RepoInfo {
             name: repo_name,
@@ -671,26 +672,50 @@ fn co_authors(trailers: &str) -> Vec<String> {
 }
 
 /// Paths that conflict when merging `head` into `base` (empty when it merges cleanly).
-/// Uses `git merge-tree --write-tree` (git 2.38+), which does not touch the work tree or index.
+/// Uses `git merge-tree --write-tree` (git 2.38+), which does not touch the work tree or index;
+/// the objects it writes go to a throwaway object directory, so the repository stays unchanged.
 fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
+    type Cache = std::sync::Mutex<std::collections::HashMap<(String, String), Option<Vec<String>>>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = (base.to_string(), head.to_string());
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return hit;
+    }
+    let objects = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "objects"])?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("prv-merge-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&tmp).ok()?;
     let mut cmd = git.cmd();
-    cmd.args(["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head]);
-    let out = crate::proc::run(cmd, None, std::time::Duration::from_secs(30)).ok()?;
-    if out.timed_out {
-        return None;
-    }
-    match out.code {
-        // Output: the tree id, then (on conflicts) the conflicted paths, NUL separated.
-        Some(0) => Some(vec![]),
-        Some(1) => {
-            let mut parts = out.stdout.split('\0').filter(|p| !p.is_empty());
-            parts.next();
-            let mut paths: Vec<String> = parts.map(|p| p.to_string()).collect();
-            paths.dedup();
-            Some(paths)
+    cmd.env("GIT_OBJECT_DIRECTORY", &tmp)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &objects)
+        .args(["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head]);
+    let out = crate::proc::run(cmd, None, std::time::Duration::from_secs(30));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let out = out.ok()?;
+    let result = if out.timed_out {
+        None
+    } else {
+        match out.code {
+            // Output: the tree id, then (on conflicts) the conflicted paths, NUL separated.
+            Some(0) => Some(vec![]),
+            Some(1) => {
+                let mut parts = out.stdout.split('\0').filter(|p| !p.is_empty());
+                parts.next();
+                let mut paths: Vec<String> = parts.map(|p| p.to_string()).collect();
+                paths.dedup();
+                Some(paths)
+            }
+            _ => None,
         }
-        _ => None,
+    };
+    if let Ok(mut c) = cache.lock() {
+        c.insert(key, result.clone());
     }
+    result
 }
 
 fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {

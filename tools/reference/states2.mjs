@@ -8,7 +8,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const [, , prUrl, outDir = 'out', scheme = 'light'] = process.argv
+const [, , prUrl, outDir, scheme = 'light'] = process.argv
+// Captures hold your signed-in page: write them only where you choose (e.g. .ref/, ignored by git).
+if (!prUrl || !outDir) {
+  console.error('usage: node states2.mjs <https://github.com/o/r/pull/N> <outDir> [light|dark]')
+  process.exit(1)
+}
 fs.mkdirSync(outDir, { recursive: true })
 const ctx = await chromium.launchPersistentContext(path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile'), {
   channel: 'chrome',

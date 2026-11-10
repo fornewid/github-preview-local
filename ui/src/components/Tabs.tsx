@@ -13,7 +13,7 @@ import {
   XCircleFillIcon,
 } from '@primer/octicons-react'
 import { Button, Label } from '@primer/react'
-import { useStore } from '../store'
+import { canConfirm, useStore } from '../store'
 import { Avatar, CopyButton, Markdown } from './common'
 import { MarkdownEditor } from './MarkdownEditor'
 import { ChecksStatusIcon, useChecksSummary } from './PageHeader'
@@ -46,6 +46,11 @@ export function ConversationTab() {
   const setTab = useStore((st) => st.setTab)
   const setPanel = useStore((st) => st.setPanel)
   const openReview = useStore((st) => st.openReview)
+  const transport = useStore((st) => st.transport)
+  const range = useStore((st) => st.range)
+  const existing = useStore((st) => st.existingPr)
+  const pr = existing?.pr ?? s.existingPr
+  const confirmable = canConfirm({ transport, range })
   const checks = useChecksSummary()
   const [editing, setEditing] = useState(false)
   const [body, setBody] = useState(prBody)
@@ -174,20 +179,25 @@ export function ConversationTab() {
                       : 'No conflicts with base branch'}
                 </h3>
                 <div className="MergeBox-sub">
-                  {s.conflicts?.length ? s.conflicts.slice(0, 5).join(', ') : 'Merging can be performed automatically.'}
+                  {s.conflicts == null
+                    ? 'Conflicts could not be checked for this view.'
+                    : s.conflicts.length
+                      ? s.conflicts.slice(0, 5).join(', ')
+                      : 'Merging can be performed automatically.'}
                 </div>
               </div>
             </div>
             <div className="MergeBox-row MergeBox-actions">
               <Button
                 variant="primary"
+                disabled={!confirmable}
                 onClick={() => {
                   setTab('files')
                   setPanel('merge')
                   openReview('CONFIRM')
                 }}
               >
-                {s.existingPr ? `Confirm and push to #${s.existingPr.number}` : 'Confirm and create pull request'}
+                {pr ? `Confirm and push to #${pr.number}` : 'Confirm and create pull request'}
               </Button>
             </div>
           </div>
@@ -261,14 +271,16 @@ function CommitRow({ c }: { c: Commit }) {
 
 export function CommitsTab() {
   const s = useStore((st) => st.snapshot)!
-  // Oldest first, grouped by committer date (like github.com).
+  // Oldest first; consecutive commits with the same committer date share a group (like github.com).
   const groups = useMemo(() => {
-    const m = new Map<string, Commit[]>()
+    const out: Array<[string, Commit[]]> = []
     for (const c of s.commits) {
       const k = longDate(c.committerDate || c.date)
-      m.set(k, [...(m.get(k) ?? []), c])
+      const last = out[out.length - 1]
+      if (last && last[0] === k) last[1].push(c)
+      else out.push([k, [c]])
     }
-    return [...m.entries()]
+    return out
   }, [s.commits])
   if (!s.commits.length)
     return (
@@ -280,7 +292,7 @@ export function CommitsTab() {
   return (
     <div className="Commits">
       {groups.map(([date, commits]) => (
-        <div key={date} className="Commits-group">
+        <div key={`${date}-${commits[0].sha}`} className="Commits-group">
           <div className="Commits-groupTitle">
             <GitCommitIcon size={16} /> Commits on {date}
           </div>
