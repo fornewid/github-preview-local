@@ -30,7 +30,7 @@ import { canConfirm, useStore, viewKey } from '../../store'
 import type { Commit, ReviewEvent } from '../../types'
 import { anchorFor, plural, shortDate, viewedKey } from '../../diff/util'
 import { MarkdownEditor } from '../MarkdownEditor'
-import { MEDIA, TOOLBAR, useContentWidth, useMediaQuery } from '../../layout'
+import { toolbarOverflow, treeBesideNow, useContentWidthClass, useTreeBeside } from '../../layout'
 
 /** Sticky toolbar above the diffs (new "Files changed" experience). */
 export function ChangesToolbar() {
@@ -40,13 +40,13 @@ export function ChangesToolbar() {
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
   const drafts = useStore((st) => st.drafts.length)
-  const treePane = useMediaQuery(MEDIA.treePane)
+  const treePane = useTreeBeside()
   const ref = useRef<HTMLElement>(null)
-  const width = useContentWidth(ref)
-  const [pickerOpen, setPickerOpen] = useState(false)
   // Same thresholds as the container queries in prv.css (the toolbar is the container).
-  const menuCommits = width !== null && width <= TOOLBAR.commits
-  const menuRest = width !== null && width < TOOLBAR.rest
+  const overflow = useContentWidthClass(ref, toolbarOverflow) ?? 0
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const menuCommits = overflow >= 1
+  const menuRest = overflow === 2
   const toggleComments = () => setPanel(panel === 'comments' ? null : 'comments')
   return (
     <section ref={ref} className="ChangesToolbar" aria-labelledby="pr-toolbar-heading">
@@ -279,7 +279,7 @@ export function useShortcuts() {
       const { applySettings, settings } = useStore.getState()
       if (e.key === 'i') applySettings({ minimizeComments: !settings.minimizeComments })
       else if (e.key === 't') {
-        if (window.matchMedia(MEDIA.treePane).matches) applySettings({ treeVisible: true })
+        if (treeBesideNow()) applySettings({ treeVisible: true })
         else useStore.getState().setTreeDialog(true)
         setTimeout(() => (document.getElementById('file-tree-filter') as HTMLInputElement | null)?.focus(), 50)
         e.preventDefault()

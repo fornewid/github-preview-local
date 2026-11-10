@@ -16,7 +16,7 @@ import { Avatar, Markdown } from '../common'
 import { MarkdownEditor } from '../MarkdownEditor'
 import { ChecksStatusIcon, useChecksSummary } from '../PageHeader'
 import { anchorFor, plural } from '../../diff/util'
-import { clampSidePanel, SIDE_PANEL, sidePanelMax } from '../../layout'
+import { clampSidePanel, setSidePanelWidth, SIDE_PANEL, sidePanelMax, useSidePanelWidth } from '../../layout'
 
 const PANELS: Array<[Panel, string, typeof InfoIcon]> = [
   ['comments', 'Comments', CommentDiscussionIcon],
@@ -28,7 +28,7 @@ export function SidePanel({ docked }: { docked: boolean }) {
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
   const [editing, setEditing] = useState(false)
-  const [width, setWidth] = useState(storedWidth.get)
+  const width = useSidePanelWidth((st) => st.width)
   useEffect(() => setEditing(false), [panel])
   if (!panel) return null
   const [, title, Icon] = PANELS.find(([k]) => k === panel)!
@@ -67,13 +67,7 @@ export function SidePanel({ docked }: { docked: boolean }) {
     )
   return (
     <aside className="SidePanel" aria-label={title} style={{ ['--side-panel-width' as string]: `${width}px` }}>
-      <SidePanelDivider
-        width={width}
-        onResizeEnd={(w) => {
-          storedWidth.set(w)
-          setWidth(w)
-        }}
-      />
+      <SidePanelDivider width={width} onResizeEnd={setSidePanelWidth} />
       <div className="SidePanel-inner">
         <div className="SidePanel-header">
           <ActionMenu>
@@ -104,21 +98,6 @@ export function SidePanel({ docked }: { docked: boolean }) {
       </div>
     </aside>
   )
-}
-
-/** The docked panel's width, kept across sessions (github.com keeps it per user). */
-const storedWidth = {
-  get(): number {
-    const v = Number(localStorage.getItem(SIDE_PANEL.storageKey))
-    return Number.isFinite(v) && v > 0 ? v : SIDE_PANEL.default
-  },
-  set(v: number) {
-    try {
-      localStorage.setItem(SIDE_PANEL.storageKey, String(Math.round(v)))
-    } catch {
-      /* storage may be unavailable for file:// pages */
-    }
-  },
 }
 
 /**
@@ -161,7 +140,8 @@ function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: 
           el.setPointerCapture(e.pointerId)
           el.dataset.dragging = 'true'
           const startX = e.clientX
-          const start = now
+          // The rendered width (CSS clamps it), so the panel does not jump when dragging starts.
+          const start = el.closest('.SidePanel')?.querySelector<HTMLElement>('.SidePanel-inner')?.getBoundingClientRect().width ?? now
           let last = start
           const move = (ev: PointerEvent) => {
             // The panel is at the end: moving left makes it wider.
@@ -173,7 +153,8 @@ function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: 
             el.removeEventListener('pointermove', move)
             el.removeEventListener('pointerup', end)
             el.removeEventListener('lostpointercapture', end)
-            onResizeEnd(clampSidePanel(last))
+            // A click without a drag keeps the saved width (it may be wider than this window allows).
+            if (last !== start) onResizeEnd(clampSidePanel(last))
           }
           el.addEventListener('pointermove', move)
           el.addEventListener('pointerup', end)
@@ -182,7 +163,8 @@ function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: 
         onKeyDown={(e) => {
           if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
           e.preventDefault()
-          onResizeEnd(clampSidePanel(now + (e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -3 : 3)))
+          // From the current width, which may be above what is shown (Primer does the same).
+          onResizeEnd(clampSidePanel(width + (e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -3 : 3)))
         }}
         onDoubleClick={() => onResizeEnd(SIDE_PANEL.default)}
       />

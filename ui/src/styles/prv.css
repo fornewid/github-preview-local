@@ -1897,7 +1897,7 @@ h3 {
     white-space: nowrap;
   }
 }
-@media (width < 544px) {
+@media (max-width: 543.98px) {
   .PullHeader-meta {
     flex-direction: column;
   }
@@ -1951,7 +1951,7 @@ h3 {
     display: none;
   }
 }
-@media (width < 1012px) {
+@media (max-width: 1011.98px) {
   .ViewedProgress-label {
     display: none;
   }
@@ -2014,7 +2014,7 @@ h3 {
 .CommitRow-menu {
   display: none;
 }
-@media (width < 1012px) {
+@media (max-width: 1011.98px) {
   .Conversation {
     grid-template-columns: minmax(0, 1fr) 256px;
   }
@@ -2047,7 +2047,7 @@ h3 {
     border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
   }
 }
-@media (width < 544px) {
+@media (max-width: 543.98px) {
   .CommitRow .CommitRow-actions {
     display: none;
   }
@@ -2071,7 +2071,7 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-@media (width < 1012px) {
+@media (max-width: 1011.98px) {
   .Checks-headerTitle {
     max-width: 150px;
   }

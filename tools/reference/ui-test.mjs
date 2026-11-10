@@ -263,6 +263,10 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
     await page.getByRole('button', { name: 'Open overview panel' }).click()
     await settle()
   }
+  // Earlier checks narrowed the window, which lowers the panel width for this page (Primer): reload.
+  await width(1920)
+  await page.reload({ waitUntil: 'load' })
+  await settle(1500)
   for (const [w, expected] of [[1920, 547], [1440, 484], [1300, 453]]) {
     await width(w)
     await open()
@@ -271,20 +275,41 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
     await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
     await settle(300)
   }
+  // Like Primer on github.com: narrowing the window lowered the width, widening keeps it.
   await width(1920)
   await open()
+  const panelWidth = () => page.locator('.SidePanel').evaluate((e) => Math.round(e.getBoundingClientRect().width))
+  assert((await panelWidth()) === 453, `kept the narrower width at 1920px, got ${await panelWidth()}`)
   const handle = page.locator('.SidePanel').getByRole('slider', { name: 'Draggable pane splitter' })
+  await handle.dblclick()
+  await settle(300)
+  assert((await handle.getAttribute('aria-valuenow')) === '544' && (await panelWidth()) === 547, 'double-click resets to 544px')
   await handle.focus()
   await page.keyboard.press('ArrowLeft')
   await settle(300)
   assert((await handle.getAttribute('aria-valuenow')) === '541', 'arrow key resizes by 3px')
   await handle.dblclick()
   await settle(300)
-  assert((await handle.getAttribute('aria-valuenow')) === '544', 'double-click resets to 544px')
   await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+  // Docked at 1440px: hidden while the window is narrower than 1012px, docked again after; with
+  // it docked the tree stays beside the diffs down to 1044px (not 1076px).
+  await width(1440)
+  await open()
+  await width(1050)
+  assert(await page.locator('.FileTreePane').count() === 1, 'tree beside at 1050px with the panel docked')
+  await width(1043)
+  assert(await page.locator('.FileTreePane').count() === 0, 'tree in a dialog at 1043px')
+  await width(900)
+  assert((await dialogs()) === 0 && (await page.locator('.SidePanel').count()) === 0, 'docked panel hidden at 900px')
+  await width(1440)
+  assert(await page.locator('.SidePanel').count() === 1, 'docked again at 1440px')
+  await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+  // Opened narrow: a dialog, and it stays one when the window widens.
   await width(900)
   await open()
   assert((await dialogs()) === 1 && (await page.locator('.SidePanel').count()) === 0, 'dialog at 900px')
+  await width(1440)
+  assert((await dialogs()) === 1 && (await page.locator('.SidePanel').count()) === 0, 'still a dialog at 1440px')
   await closeDialogs()
   assert((await dialogs()) === 0, 'Escape closes it')
 })

@@ -26,7 +26,7 @@ page, so the reference is captured with a signed-in Chrome profile (see
 | Tabs | 14px / 22.96px, padding 8px 12px, selected: `--bgColor-default`, 1px border, radius 6px 6px 0 0; `CounterLabel` margin-left 8px; diffstat right, padding-top 12px |
 | Conversation / Commits | centered `container-xl` (1280px including 32px padding); conversation sidebar 320px (256px under 1012px) |
 | Checks | check list a third of the width, details beside it |
-| Side panel (Overview, Comments, Merge status) | `PageLayout.Sidebar`, resizable (*Draggable pane splitter*: drag, arrow keys 3px, double-click resets): `clamp(450px, width, min(768px, max(450px, 100vw − d)))` with width 544px by default, d = 959px from 1280px, else 511px; plus 1px border, 1px divider, 1px → 484px at 1440, 547px from 1503px, 453px at 1280–1409. Sticky top 0, full height; header 49px (padding 8px). The page header runs up to it, the toolbar and diffs stop 16px before it |
+| Side panel (Overview, Comments, Merge status) | `PageLayout.Sidebar`, resizable (*Draggable pane splitter*: drag, arrow keys 3px, double-click resets): `clamp(450px, width, min(768px, max(450px, 100vw − d)))` with width 544px by default, d = 959px from 1280px, else 511px; plus 1px border, 1px divider, 1px → 484px at 1440, 547px from 1503px, 453px at 1280–1409. Like Primer, every window resize lowers the current width to the new maximum and widening does not raise it again (until a reload, drag or double-click). Sticky top 0, full height; header 49px (padding 8px). The page header runs up to it, the toolbar and diffs stop 16px before it |
 
 ## Files changed
 
@@ -65,14 +65,14 @@ page, so the reference is captured with a signed-in Chrome profile (see
 
 Measured with `tools/reference/breakpoints.mjs` (it finds each threshold to the pixel on
 github.com and on a prv export and prints them side by side; they are identical from 2560px to
-320px). Widths are CSS pixels: browser zoom divides the window width (a 1440px window at 150% is
+320px, and with `--panel` from 1600px to 1012px with the side panel open). Widths are CSS pixels: browser zoom divides the window width (a 1440px window at 150% is
 960px), and so does the native window's zoom (Cmd/Ctrl + `=` / `-` / `0`, Chrome's levels 25–500%).
 
 | Window | github.com (and prv) |
 |---|---|
-| ≥ 1076px | File tree beside the diffs (page container ≥ 1012px plus 2 × 32px padding) |
+| ≥ 1076px | File tree beside the diffs (page container ≥ 1012px plus 2 × 32px padding; with the side panel docked the container has no right padding, so ≥ 1044px) |
 | < 1076px | Tree hidden; the toggle opens a *Files* `Dialog` from the left (640px; fullscreen under 768px), closed by choosing a file. Header actions (*Merge status*) move above the title (`@container (width <= 1011px)`; with the side panel open the header itself is the container) |
-| < 1012px | Page padding 24px; side panel opens as a `Dialog` from the right (640px; fullscreen under 768px); *viewed* word hidden (`0 / 2`); conversation sidebar 256px; checks title truncated at 150px |
+| < 1012px | Page padding 24px; *viewed* word hidden (`0 / 2`); conversation sidebar 256px; checks title truncated at 150px. A side panel opened now is a `Dialog` from the right (640px; fullscreen under 768px) and stays a dialog if the window widens; a docked panel hides while the window is this narrow and comes back docked |
 | < 816px | Header and toolbar containers under 768px: *Merge status* → *Status*, *Submit review* → *Review*; tab diffstat hidden (container ≤ 768px) |
 | ≤ 768px | Checks: list above the details |
 | < 768px | Page padding 16px; toolbar dividers hidden; file header: chevron, path, icon-only *Viewed*, kebab — comment, copy, expand-all, stats and CODEOWNERS shield move into the kebab menu (*Comment on this file*, *Copy file name*, *Expand all lines*, *Owned by …*); *Finish your review* fullscreen; conversation: no avatar column (24px avatar in the comment header), sidebar and merge box below the timeline, merge icon hidden; Primer stacks the layout content |

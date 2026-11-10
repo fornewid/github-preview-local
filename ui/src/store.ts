@@ -101,6 +101,11 @@ export interface Store {
   settings: Settings
   tab: Tab
   panel: Panel | null
+  /**
+   * The panel was opened in a window too narrow to dock it (under 1012px), so it is a dialog until
+   * closed, whatever the width later. A docked panel instead hides while the window is narrow.
+   */
+  panelDialog: boolean
   /** The file tree dialog (narrow windows, where the tree is not beside the diffs). */
   treeDialog: boolean
   /** "Finish your review" overlay is open. */
@@ -180,6 +185,7 @@ export const useStore = create<Store>((set, get) => ({
   settings: loadSettings(),
   tab: 'files',
   panel: null,
+  panelDialog: false,
   treeDialog: false,
   reviewOpen: false,
   reviewDraft: { body: '', event: 'COMMENT', draft: false, error: null },
@@ -291,7 +297,12 @@ export const useStore = create<Store>((set, get) => ({
     set({ settings })
   },
 
-  setPanel: (panel) => set({ panel }),
+  setPanel: (panel) =>
+    set((s) => ({
+      panel,
+      // Decided when the panel opens (switching panels keeps it), like github.com.
+      panelDialog: !panel ? false : s.panel ? s.panelDialog : !window.matchMedia('(min-width: 1012px)').matches,
+    })),
   setTreeDialog: (treeDialog) => set({ treeDialog }),
   openReview: (e) => {
     if (e === null) {

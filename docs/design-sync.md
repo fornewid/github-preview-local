@@ -56,6 +56,7 @@ change in `ui/src/styles/prv.css` (the "Widths and zoom" section) or `ui/src/lay
 
 ```bash
 node breakpoints.mjs $PR ../../.ref/prv.html --from 2560 --to 320
+node breakpoints.mjs $PR ../../.ref/prv.html --from 1600 --to 1012 --panel   # side panel open
 ```
 
 `compare.py` aligns both captures at the pull request toolbar (pass its top in CSS px for each

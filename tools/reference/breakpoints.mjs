@@ -2,7 +2,10 @@
 // diffs or in a dialog, header actions above the title, shortened labels, overflow menu, compact
 // file headers, …) on github.com and on a prv export, and prints them side by side.
 //
-//   node breakpoints.mjs <pull request URL> <preview.html> [--from 1600] [--to 320]
+//   node breakpoints.mjs <pull request URL> <preview.html> [--from 1600] [--to 320] [--panel]
+//
+// --panel sweeps with the Overview side panel open (it docks from 1012px and changes, for
+// example, the width at which the file tree leaves the side).
 //
 // Features are detected by accessible names and visible text, which prv keeps identical to
 // github.com, so one detector serves both pages. Widths are CSS pixels; browser zoom (and the
@@ -21,9 +24,12 @@ const opt = (name, def) => {
 }
 const from = opt('--from', 1600)
 const to = opt('--to', 320)
+const panelFlag = args.indexOf('--panel')
+const withPanel = panelFlag >= 0
+if (withPanel) args.splice(panelFlag, 1)
 const [prUrl, exportFile] = args
 if (!prUrl || !exportFile) {
-  console.error('usage: node breakpoints.mjs <https://github.com/o/r/pull/N> <preview.html> [--from 1600] [--to 320]')
+  console.error('usage: node breakpoints.mjs <https://github.com/o/r/pull/N> <preview.html> [--from 1600] [--to 320] [--panel]')
   process.exit(1)
 }
 
@@ -93,6 +99,12 @@ function features() {
   }
 }
 
+async function openPanel(page) {
+  if (!withPanel) return
+  await page.getByRole('button', { name: 'Open overview panel' }).first().click()
+  await page.waitForTimeout(1200)
+}
+
 async function sweep(page) {
   const at = async (w) => {
     await page.setViewportSize({ width: w, height: 900 })
@@ -141,20 +153,38 @@ async function github() {
   await page.waitForSelector('table', { timeout: 60000 })
   await page.waitForTimeout(3000)
   const initial = await treeOn(page)
+  // github.com keeps the file tree's visibility per user: put it back however the run ends.
+  const restore = async () => {
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
+      await page.waitForSelector('table', { timeout: 60000 })
+      await page.waitForTimeout(2000)
+      if (!initial && (await treeOn(page))) {
+        await page.getByRole('button', { name: 'Collapse file tree' }).first().click()
+        await page.waitForTimeout(1500)
+      }
+    } finally {
+      await ctx.close()
+    }
+  }
+  const onSignal = () => {
+    console.error('\ninterrupted: restoring the file tree on github.com…')
+    restore().finally(() => process.exit(130))
+  }
+  process.once('SIGINT', onSignal)
+  process.once('SIGTERM', onSignal)
   try {
     if (!initial) {
       await page.getByRole('button', { name: 'Expand file tree' }).first().click()
       await page.waitForTimeout(1200)
     }
+    await openPanel(page)
     return await sweep(page)
   } finally {
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.waitForTimeout(1000)
-    if (!initial && (await treeOn(page))) {
-      await page.getByRole('button', { name: 'Collapse file tree' }).first().click()
-      await page.waitForTimeout(1500)
-    }
-    await ctx.close()
+    process.removeListener('SIGINT', onSignal)
+    process.removeListener('SIGTERM', onSignal)
+    await restore()
   }
 }
 
@@ -170,6 +200,7 @@ async function prv() {
   await page.goto(url, { waitUntil: 'load' })
   await page.waitForTimeout(2000)
   try {
+    await openPanel(page)
     return await sweep(page)
   } finally {
     await browser.close()
@@ -185,7 +216,7 @@ const sorted = [...rows.values()].sort((a, b) => (b.github ?? b.prv) - (a.github
 let mismatches = 0
 // github.com's own header (Status, Code, Preview buttons) overflows very narrow windows; prv not overflowing is fine.
 const tolerated = (r) => r.change.startsWith('horizontal overflow') && r.prv === undefined
-console.log(`Changes between ${from}px and ${to}px (the width is the narrowest window that still has the "from" state)\n`)
+console.log(`Changes between ${from}px and ${to}px${withPanel ? ', side panel open' : ''} (the width is the narrowest window that still has the "from" state)\n`)
 for (const r of sorted) {
   const ok = r.github === r.prv || tolerated(r)
   if (!ok) mismatches++

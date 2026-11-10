@@ -85,7 +85,9 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   const ref = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
   const [forceLoad, setForceLoad] = useState(false)
-  const settings = useStore((st) => st.settings)
+  const settings = useStore(
+    useShallow((st) => ({ hideWhitespace: st.settings.hideWhitespace, compact: st.settings.compact, diffView: st.settings.diffView })),
+  )
   const ui = useStore((st) => st.fileUI[file.path])
   const isViewed = useStore((st) => st.viewed[file.path] === viewedKey(file))
   const editorconfig = useStore((st) => st.snapshot?.editorconfig)
@@ -324,50 +326,58 @@ function Placeholder({ children }: { children: ReactNode }) {
  * File kebab menu. Below 768px github.com hides the header's comment, copy and expand buttons,
  * stats and CODEOWNERS shield, and offers them here instead.
  */
-function FileMenu({
-  file,
-  owners,
-  onComment,
-  expand,
-}: {
+type FileMenuProps = {
   file: FileDiff
   owners: string | null
   onComment: () => void
   expand: { label: string; run: () => void } | null
-}) {
-  const transport = useStore((st) => st.transport)
-  const native = transport?.kind === 'native'
-  const narrow = useMediaQuery(MEDIA.narrow)
+}
+
+/**
+ * File kebab menu. Below 768px github.com hides the header's comment, copy and expand buttons,
+ * stats and CODEOWNERS shield, and offers them here instead.
+ */
+function FileMenu(props: FileMenuProps) {
   return (
     <ActionMenu>
       <ActionMenu.Anchor>
         <IconButton size="small" variant="invisible" icon={KebabHorizontalIcon} aria-label="More options" />
       </ActionMenu.Anchor>
       <ActionMenu.Overlay align="end">
-        <ActionList>
-          {narrow && (
-            <>
-              <ActionList.Item onSelect={onComment}>Comment on this file</ActionList.Item>
-              <ActionList.Divider />
-              <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file name</ActionList.Item>
-              {expand && <ActionList.Item onSelect={expand.run}>{expand.label}</ActionList.Item>}
-            </>
-          )}
-          <ActionList.Item disabled={!native || file.status === 'deleted'} onSelect={() => void transport?.openInEditor(file.path)}>
-            Open in editor
-          </ActionList.Item>
-          {!narrow && <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file path</ActionList.Item>}
-          {narrow && owners && (
-            <ActionList.Item className="FileMenu-owners">
-              <ActionList.LeadingVisual>
-                <ShieldLockIcon />
-              </ActionList.LeadingVisual>
-              {owners}
-            </ActionList.Item>
-          )}
-        </ActionList>
+        <FileMenuItems {...props} />
       </ActionMenu.Overlay>
     </ActionMenu>
+  )
+}
+
+/** Mounted only while the menu is open, so files do not each watch the window width. */
+function FileMenuItems({ file, owners, onComment, expand }: FileMenuProps) {
+  const transport = useStore((st) => st.transport)
+  const native = transport?.kind === 'native'
+  const narrow = useMediaQuery(MEDIA.narrow)
+  return (
+    <ActionList>
+      {narrow && (
+        <>
+          <ActionList.Item onSelect={onComment}>Comment on this file</ActionList.Item>
+          <ActionList.Divider />
+          <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file name</ActionList.Item>
+          {expand && <ActionList.Item onSelect={expand.run}>{expand.label}</ActionList.Item>}
+        </>
+      )}
+      <ActionList.Item disabled={!native || file.status === 'deleted'} onSelect={() => void transport?.openInEditor(file.path)}>
+        Open in editor
+      </ActionList.Item>
+      {!narrow && <ActionList.Item onSelect={() => void copyText(file.path)}>Copy file path</ActionList.Item>}
+      {narrow && owners && (
+        <ActionList.Item className="FileMenu-owners">
+          <ActionList.LeadingVisual>
+            <ShieldLockIcon />
+          </ActionList.LeadingVisual>
+          {owners}
+        </ActionList.Item>
+      )}
+    </ActionList>
   )
 }
 

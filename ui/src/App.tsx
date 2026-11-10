@@ -9,7 +9,7 @@ import { SidePanel } from './components/changes/SidePanel'
 import { ChecksTab, CommitsTab, ConversationTab } from './components/Tabs'
 import { copyText } from './components/common'
 import { extOf, viewedKey } from './diff/util'
-import { MEDIA, nextZoom, useMediaQuery } from './layout'
+import { MEDIA, nextZoom, useMediaQuery, useTreeBeside } from './layout'
 
 /** Keeps a rendering error in one part of the page from blanking the window. */
 export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -67,15 +67,18 @@ function Page() {
   const panel = useStore((st) => st.panel)
   const loading = useStore((st) => st.loading)
   const warnings = useStore((st) => st.snapshot!.warnings)
-  const docked = useMediaQuery(MEDIA.dockedPanel)
+  const panelDialog = useStore((st) => st.panelDialog)
+  const wide = useMediaQuery(MEDIA.dockedPanel)
   useShortcuts()
   useZoom()
   const centered = tab === 'conversation' || tab === 'commits'
   const showPanel = !!panel && tab === 'files'
+  // A docked panel hides while the window is too narrow for it and comes back when it widens.
+  const docked = showPanel && !panelDialog && wide
   return (
     <>
       <AppHeader />
-      <div className={`App-body ${showPanel && docked ? 'has-panel' : ''}`}>
+      <div className={`App-body ${docked ? 'has-panel' : ''}`}>
         <div className={`App-main ${centered ? 'App-main--centered' : ''}`}>
           <PageLayout
             containerWidth="full"
@@ -100,7 +103,7 @@ function Page() {
             )}
           </PageLayout>
         </div>
-        {showPanel && <SidePanel docked={docked} />}
+        {showPanel && (panelDialog || docked) && <SidePanel docked={docked} />}
       </div>
     </>
   )
@@ -113,7 +116,7 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
   const treeVisible = useStore((st) => st.settings.treeVisible)
   const treeDialog = useStore((st) => st.treeDialog)
   // Wide enough: the tree sits beside the diffs (if shown); otherwise it opens as a dialog.
-  const treePane = useMediaQuery(MEDIA.treePane)
+  const treePane = useTreeBeside()
   useEffect(() => {
     if (treePane && treeDialog) useStore.getState().setTreeDialog(false)
   }, [treePane, treeDialog])
