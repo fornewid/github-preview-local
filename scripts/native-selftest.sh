@@ -32,7 +32,15 @@ PRV="$(cd "$(dirname "$PRV")" && pwd)/$(basename "$PRV")" # the script works in 
 # Never act on the repository this is run from (e.g. inside a git hook) and never prompt.
 unset $(git rev-parse --local-env-vars 2>/dev/null) || true
 export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1
-timed() { perl -e 'alarm shift; exec @ARGV' "$@"; } # timed SECONDS command...
+# timed SECONDS command...: TERM when time is up (prv then exits the normal way and stops its
+# checks), KILL 5s later; the command's exit status otherwise.
+timed() {
+  perl -e 'my $t = shift; my $pid = fork; die "fork: $!\n" unless defined $pid;
+    if (!$pid) { exec @ARGV or die "exec $ARGV[0]: $!\n" }
+    $SIG{ALRM} = sub { kill "TERM", $pid; sleep 5; kill "KILL", $pid };
+    alarm $t; waitpid $pid, 0; my $s = $?;
+    exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' "$@"
+}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/prv-selftest.XXXXXX")
 trap 'cp "$WORK/out.txt" "${PRV_SELFTEST_KEEP:-/dev/null}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 TOKEN="31.$$" # the slow check sleeps this long: a unique command line to look for afterwards
@@ -67,6 +75,9 @@ TOML
   local exclude
   exclude=$(git rev-parse --git-path info/exclude)
   mkdir -p "$(dirname "$exclude")" && echo .prv.toml >> "$exclude"
+  if git ls-files --error-unmatch .prv.toml > /dev/null 2>&1; then
+    git update-index --skip-worktree .prv.toml
+  fi
 }
 
 if [ -n "$GH_REPO" ]; then
@@ -76,8 +87,14 @@ if [ -n "$GH_REPO" ]; then
   rc=0
   timed 60 git ls-remote --exit-code -q origin refs/heads/main > /dev/null || rc=$?
   case $rc in
-    0) timed 120 git fetch -q origin main && git reset -q --hard origin/main ;;
-    2) initial_commit && timed 120 git push -q origin main ;; # empty repository
+    0)
+      timed 120 git fetch -q origin main || { echo "cannot fetch main" >&2; exit 1; }
+      git reset -q --hard origin/main
+      ;;
+    2) # empty repository
+      initial_commit
+      timed 120 git push -q origin main || { echo "cannot push main" >&2; exit 1; }
+      ;;
     *) echo "cannot read https://github.com/$GH_REPO (git ls-remote exit $rc)" >&2; exit 1 ;;
   esac
   timed 120 git fetch -q origin main
@@ -85,7 +102,8 @@ if [ -n "$GH_REPO" ]; then
 else
   REPO_ID="prv-selftest/sample"
   BRANCH="feature"
-  git init -q --bare -b main "$WORK/remote.git"
+  git init -q --bare --template= -b main "$WORK/remote.git"
+  git -C "$WORK/remote.git" config core.hooksPath /dev/null
   initial_commit
   git remote add origin "https://github.com/$REPO_ID.git"
   git config remote.origin.pushurl "$WORK/remote.git" # pushes stay on this machine
@@ -122,18 +140,18 @@ run_round() {
   local head_sha remote_sha pr_url pr_json leftover code
   head_sha=$(git rev-parse HEAD)
   set +e
-  PATH="$PATH_PREFIX$PATH" PRV_SELFTEST=flows timed 600 "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
+  PATH="$PATH_PREFIX$PATH" PRV_SELFTEST=flows timed 900 "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
   code=$?
   set -e
   if [ -n "$GH_REPO" ]; then
-    remote_sha=$(timed 60 git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+    remote_sha=$(timed 60 git ls-remote origin "refs/heads/$BRANCH" | cut -f1 || true)
     pr_url=$(node -e 'const t=require("fs").readFileSync(process.argv[1],"utf8");const m=/"url":\s*"([^"]+\/pull\/\d+)"/.exec(t);console.log(m?m[1]:"")' "$WORK/out.txt")
     pr_json=$([ -n "$pr_url" ] && timed 60 gh pr view "$pr_url" --json number,url,state,isDraft,headRefName,baseRefName,title,headRefOid || echo '{}')
   else
     remote_sha=$(git --git-dir="$WORK/remote.git" rev-parse -q --verify "refs/heads/$BRANCH" || true)
     pr_json='{}'
   fi
-  leftover=$(pgrep -U "$(id -u)" -f "sleep $TOKEN" || true)
+  leftover=$(pgrep -U "$(id -u)" -f "sleep ${TOKEN/./[.]}\$" || true)
   echo "== round $round"
   ROUND_URL=$(node - "$WORK" "$code" "$head_sha" "$remote_sha" "$leftover" "$REPO_ID" "$BRANCH" "${GH_REPO:+real}" "$pr_json" "$round" "$expect_files" "$expect_url" <<'JS'
 const fs = require('fs')
@@ -151,7 +169,7 @@ let log = {}, result = {}, rest = 0
 for (; rest < lines.length && lines[rest].startsWith('{"'); rest++) {
   try {
     const l = JSON.parse(lines[rest])
-    if (l.stage || l.ok === false) log = l
+    if (l.stage || l.ok === false) log = { ...log, ...l }
   } catch {}
 }
 try { result = JSON.parse(lines.slice(rest).join('\n')) } catch {}

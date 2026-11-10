@@ -136,9 +136,10 @@ async function confirm(): Promise<void> {
   await until('open pull request lookup', () => st().existingPr && !st().existingPr!.loading)
   if (st().existingPr?.error) throw new Error(`pull request lookup failed: ${st().existingPr!.error}`)
   click($('.ReviewForm-submit'), 'Confirm and create pull request')
+  await until('publishing started', () => st().busy || st().reviewDraft.error, 5000)
   // Success ends the app (the result goes to stdout); a failure is kept in the review draft. The
-  // wait covers prv's own push (300s) and gh (120s) timeouts.
-  await until('publish result', () => st().reviewDraft.error, 450000)
+  // wait covers prv's own timeouts: three gh calls (120s each) and the push (300s).
+  await until('publish result', () => st().reviewDraft.error, 700000)
   throw new Error(`Confirm failed: ${st().reviewDraft.error}`)
 }
 
@@ -154,6 +155,6 @@ export async function runSelftest(mode: true | 'flows') {
     await confirm()
   } catch (e) {
     // Every failure ends the run with a report, never a silent hang.
-    await invoke('selftest_done', { report: { ok: false, stage: mode === 'flows' ? 'flows' : 'basic', error: String(e) } }).catch(() => {})
+    await invoke('selftest_done', { report: { ok: false, stage: verbose ? 'flows' : 'basic', error: String(e) } }).catch(() => {})
   }
 }
