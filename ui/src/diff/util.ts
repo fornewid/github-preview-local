@@ -260,3 +260,62 @@ function globMatch(glob: string, path: string) {
   if (!expand(pattern, alts)) return false
   return alts.some((a) => matchTokens(tokenize(a), target))
 }
+
+/* ---------- CODEOWNERS ---------- */
+
+export interface Ownership {
+  owners: string[]
+  /** 1-based line of the CODEOWNERS rule that applies (the last match wins). */
+  line: number
+}
+
+const ownersCache = new Map<number, Array<{ toks: Tok[][]; dirOnly: boolean; directOnly: boolean; owners: string[]; line: number }>>()
+
+function parseCodeowners(text: string) {
+  const key = hashOf(text)
+  const hit = ownersCache.get(key)
+  if (hit) return hit
+  const rules: Array<{ toks: Tok[][]; dirOnly: boolean; directOnly: boolean; owners: string[]; line: number }> = []
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) return
+    const [pat0, ...rest] = line.split(/\s+/)
+    let pat = pat0.replace(/^\\#/, '#')
+    if (pat.length > 300) return
+    const owners = rest.filter((o) => !o.startsWith('#'))
+    const dirOnly = pat.endsWith('/')
+    pat = pat.replace(/\/+$/, '')
+    const anchored = pat.startsWith('/') || pat.includes('/')
+    pat = pat.replace(/^\/+/, '')
+    if (!pat) pat = '**'
+    const pats = anchored ? [pat] : [pat, '**/' + pat]
+    rules.push({ toks: pats.map(tokenize), dirOnly, directOnly: pat.endsWith('/*'), owners, line: i + 1 })
+  })
+  if (ownersCache.size > 8) ownersCache.clear()
+  ownersCache.set(key, rules)
+  return rules
+}
+
+/** Code owners of `path` per GitHub's CODEOWNERS rules (gitignore-style patterns, last match wins). */
+export function codeownersFor(text: string | null | undefined, path: string): Ownership | null {
+  if (!text) return null
+  try {
+    const parts = path.split('/')
+    const dirs = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))
+    let found: Ownership | null = null
+    for (const r of parseCodeowners(text)) {
+      // A pattern that matches a directory owns everything below it (except `dir/*`).
+      const targets = r.dirOnly ? dirs : r.directOnly ? [path] : [path, ...dirs]
+      if (targets.some((t) => r.toks.some((toks) => matchTokens(toks, t)))) found = { owners: r.owners, line: r.line }
+    }
+    return found && found.owners.length ? found : null
+  } catch {
+    return null
+  }
+}
+
+export function ownersLabel(o: Ownership) {
+  const names = o.owners
+  const list = names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  return `Owned by ${list} (from CODEOWNERS line ${o.line})`
+}

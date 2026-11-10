@@ -65,10 +65,13 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
   if (n) {
     out.push('', '## Comments')
     r.comments.forEach((c, i) => {
-      const lines = c.startLine && c.startLine !== c.line ? `lines ${c.startLine}-${c.line}` : `line ${c.line}`
-      const side = c.side === 'LEFT' ? 'old/deleted side' : 'new side'
       const at = c.view ? ` in commit range ${c.view}` : c.commit !== r.head.sha ? ` at commit ${c.commit.slice(0, 7)}` : ''
-      out.push('', `### ${i + 1}. \`${c.path}\` ${lines} (${side})${at}`)
+      if (c.line === 0) out.push('', `### ${i + 1}. \`${c.path}\` (whole file)${at}`)
+      else {
+        const lines = c.startLine && c.startLine !== c.line ? `lines ${c.startLine}-${c.line}` : `line ${c.line}`
+        const side = c.side === 'LEFT' ? 'old/deleted side' : 'new side'
+        out.push('', `### ${i + 1}. \`${c.path}\` ${lines} (${side})${at}`)
+      }
       if (c.snippet.length) {
         const lang = FENCE_LANG[extOf(c.path)] ?? ''
         const allSame = c.snippet.every((l) => l[0] === ' ')

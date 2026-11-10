@@ -29,8 +29,11 @@ export interface HunkRow {
   gap: number
   text: string
   expanders: Expander[]
-  /** Size-0 leading gap: GitHub renders a static "..." */
+  /** Leading gap that is empty or fully revealed: the header stays, without expanders. */
   dots: boolean
+  /** New-file line numbers around the hidden lines, for the expander labels. */
+  prevEnd: number
+  nextStart: number
 }
 
 export interface LineRow {
@@ -146,7 +149,8 @@ function segments(
     if (top > 0) segs.push({ type: 'lines', lines: contextLines(g, 0, top, newLines, oldLines) })
     const r = remaining(g, { top, bottom })
     const isTail = i === gaps.length - 1
-    const showRow = r > 0 || (g.index === 0 && g.size === 0)
+    // The first hunk header always stays (GitHub recomputes it once the top is revealed).
+    const showRow = r > 0 || (g.index === 0 && !isTail)
     if (showRow) segs.push({ type: 'hunk', gap: g, hunk: isTail ? undefined : hunks[i], bottom })
     if (bottom > 0) segs.push({ type: 'lines', lines: contextLines(g, g.size - bottom, bottom, newLines, oldLines) })
     if (!isTail) segs.push({ type: 'lines', lines: hunks[i].lines })
@@ -156,13 +160,17 @@ function segments(
 
 function hunkRow(seg: Segment, gaps: Gap[], state: Record<number, GapState>): HunkRow {
   const g = seg.gap!
+  const s = state[g.index]
+  const expanders = expandersFor(g, gaps.length, s)
   return {
     kind: 'hunk',
     key: `h${g.index}`,
     gap: g.index,
     text: seg.hunk ? hunkText(seg.hunk, seg.bottom ?? 0) : '',
-    expanders: expandersFor(g, gaps.length, state[g.index]),
-    dots: g.index === 0 && g.size === 0,
+    expanders,
+    dots: g.index === 0 && expanders.length === 0,
+    prevEnd: g.newStart - 1 + (s?.top ?? 0),
+    nextStart: g.newStart + Math.max(g.size, 0) - (s?.bottom ?? 0),
   }
 }
 

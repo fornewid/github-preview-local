@@ -1,13 +1,17 @@
 # prv — local pull request preview
 
-Preview your branch **exactly the way GitHub's pull request "Files changed" tab shows it**, before
-you push. Review it with line comments, hand the review to an AI agent (Claude Code), run local
-checks, and when you are happy press **Confirm** to push the branch and open the pull request.
+Preview your branch **exactly the way github.com's pull request "Files changed" page shows it**,
+before you push. Review it with line comments, hand the review to an AI agent (Claude Code), run
+local checks, and when you are happy press **Confirm** to push the branch and open the pull request.
 
-- **Same look and options as github.com**: split / unified diff, *Hide whitespace*, file tree,
-  *File filter*, *Changes from* commit ranges, *Viewed* files, expandable context
-  (*Expand Up / Down / All*), word-level highlights, GitHub's syntax highlighting (`pl-*`),
-  Mona Sans, and every Primer theme (light, dark, dimmed, high contrast).
+- **Same look and options as github.com** (the new *Files changed* experience, 2026), built on the
+  same Primer React release github.com runs: sticky toolbar, *All commits* picker (*Changes since
+  your last review*, commit ranges), resizable file tree with filters, *Viewed* files, settings
+  (*Unified / Split*, *Whitespace changes*, *Minimize comments*, *Compact line height*), expandable
+  context, word-level highlights, GitHub's syntax highlighting (`pl-*`), CODEOWNERS, *Overview /
+  Comments / Merge status* panels and every Primer theme (light, dark, dimmed, high contrast).
+- **Kept in sync with github.com**: measuring tools capture the signed-in page and compare it with
+  prv pixel by pixel ([docs/design-sync.md](docs/design-sync.md)).
 - **Same comparison as a pull request**: three-dot diff from the merge base of `origin/<base>`
   (fetched first), rename detection, `.gitattributes` `linguist-generated`, lock files
   collapsed, binary / submodule / mode changes, CRLF, *No newline at end of file*.
@@ -20,9 +24,11 @@ checks, and when you are happy press **Confirm** to push the branch and open the
 |---|---|
 | ![split](docs/images/split-light.png) | ![unified](docs/images/unified-light.png) |
 
-| Review | Dark |
+| Review | Merge status |
 |---|---|
-| ![review](docs/images/review.png) | ![dark](docs/images/split-dark.png) |
+| ![review](docs/images/review.png) | ![merge status](docs/images/merge-status.png) |
+
+![dark](docs/images/split-dark.png)
 
 ## Why
 
@@ -70,19 +76,23 @@ prv checks [--json] [name]  # run local checks headless (exit 1 on failure)
 prv list-checks             # show configured / auto-detected checks
 ```
 
-Diff view (*Unified / Split*) and *Hide whitespace* are chosen from the gear menu and remembered,
-like on GitHub.
+Settings from the gear menu (*Unified / Split*, *Whitespace changes*, *Minimize comments* — `i`,
+*Compact line height*) are remembered, like on GitHub. `t` focuses the file filter.
 
 ### Reviewing
 
 - Hover a line and click **+** to comment; click line numbers (shift-click for a range) to comment
-  on several lines.
-- **Review changes** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
+  on several lines; the comment button in a file header comments on the whole file. The comment box
+  has GitHub's formatting toolbar, including *suggestions*.
+- **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the window closes and the review is printed to stdout.
   - *Confirm*: edit the PR title / description (prefilled from the commit or
-    `.github/pull_request_template.md`), optionally *draft*, then `prv` runs
-    `git push --set-upstream origin <branch>` and `gh pr create` (or reuses the open PR).
-- Pending comments and *Viewed* state are saved in `.git/prv/` (never committed).
+    `.github/pull_request_template.md`), optionally *draft*, then `prv` pushes the reviewed commit
+    and runs `gh pr create` (or reuses the open PR). Also available from **Merge status**, which
+    shows the local checks and whether the branch conflicts with the base branch.
+- *All commits* → *Changes since your last review* shows only the commits added since you last
+  submitted a review.
+- Pending comments, *Viewed* state and the last review are saved in `.git/prv/` (never committed).
 
 Example output:
 
@@ -122,26 +132,27 @@ Without a config, prv detects `package.json` scripts (lint, typecheck, check, te
 `./gradlew check`, Cargo, Go, Makefile `lint`/`test` targets and pre-commit. Commands run in the
 repository root with `PRV_BASE`, `PRV_BASE_SHA`, `PRV_HEAD`, `PRV_MERGE_BASE` and
 `PRV_CHANGED_FILES` (newline-separated) in the environment. Results appear in the **Checks** tab
-and in the *Confirm* panel.
+and in the *Merge status* panel.
 
 ## How it works
 
 ```
 prv (Rust CLI)                          native window (system WebView)
  ├─ git: merge-base, diff --raw/--numstat/-U3 (and -w), cat-file   ◄── Tauri IPC ──►  React UI
- ├─ checks runner (.prv.toml / auto-detect)                                  ├─ Primer primitives tokens
- ├─ publish: git push + gh pr create                                         ├─ starry-night (GitHub grammars, pl-* classes)
- └─ prints the review to stdout on exit                                      └─ GitHub classic Files changed layout
+ ├─ merge-tree conflicts, CODEOWNERS of the base branch                      ├─ Primer React (github.com's release) + primitives
+ ├─ checks runner (.prv.toml / auto-detect)                                  ├─ starry-night (GitHub grammars, pl-* classes)
+ ├─ publish: git push + gh pr create                                         └─ GitHub's new Files changed layout (prv.css)
+ └─ prints the review to stdout on exit
 ```
 
-The UI is a single HTML file (fonts, highlighter worker and WASM inlined) embedded in the binary;
+The UI is a single HTML file (highlighter worker and WASM inlined) embedded in the binary;
 `prv export` writes the same file with the data embedded.
 
 - `ui/` — React + TypeScript UI (`npm run dev` serves `public/dev-data.json` from `prv export --data`)
 - `src-tauri/` — Rust CLI / native window (`cargo build --release`)
 - `plugin/` — Claude Code plugin (`/prv` command and skill)
-- `tools/reference/` — capture github.com reference screenshots/styles with your local Chrome and
-  screenshot exports for comparison; see [docs/reference.md](docs/reference.md)
+- `tools/reference/` — measure the signed-in github.com page with your local Chrome, compare prv
+  with it and run UI tests; see [docs/design-sync.md](docs/design-sync.md)
 
 ## Development
 
@@ -149,9 +160,16 @@ The UI is a single HTML file (fonts, highlighter worker and WASM inlined) embedd
 npm --prefix ui install && npm --prefix ui run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
 PRV_SELFTEST=1 src-tauri/target/release/prv --no-fetch   # opens the window, reports what rendered, exits
+
+cd tools/reference && npm install
+node ui-test.mjs path/to/export.html                     # end-to-end checks of the review UI
 ```
+
+The page is compared with the signed-in github.com page using the tools in `tools/reference`;
+see [docs/design-sync.md](docs/design-sync.md) and the measured values in
+[docs/reference.md](docs/reference.md).
 
 ## License
 
-MIT. Fonts: Mona Sans (SIL Open Font License). Uses Primer primitives and Octicons (MIT) and
-starry-night (MIT; grammars under their own licenses). Not affiliated with GitHub.
+MIT. Uses Primer React, Primer primitives and Octicons (MIT) and starry-night (MIT; grammars under
+their own licenses). Not affiliated with GitHub.

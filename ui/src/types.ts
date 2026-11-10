@@ -17,6 +17,11 @@ export interface Commit {
   email: string
   /** ISO-8601 author date */
   date: string
+  committer: string
+  /** ISO-8601 committer date (GitHub lists and groups commits by it). */
+  committerDate: string
+  /** Names from Co-authored-by trailers, one per email address. */
+  coAuthors: string[]
   subject: string
   body: string
 }
@@ -74,6 +79,10 @@ export interface Snapshot {
   dirty: boolean
   warnings: string[]
   editorconfig?: string | null
+  /** CODEOWNERS of the base branch: [path, contents]. */
+  codeowners?: [string, string] | null
+  /** Paths that conflict when merging into the base branch; null when unknown. */
+  conflicts?: string[] | null
   existingPr?: ExistingPr | null
   generatedAt: string
 }
@@ -104,6 +113,8 @@ export interface PersistedState {
   drafts: ReviewComment[]
   prTitle?: string | null
   prBody?: string | null
+  /** Head commit of the last submitted review ("Changes since your last review"). */
+  lastReview?: { head: string; at: string } | null
 }
 
 export type ReviewEvent = 'COMMENT' | 'REQUEST_CHANGES' | 'CONFIRM'

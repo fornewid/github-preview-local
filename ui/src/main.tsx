@@ -7,7 +7,7 @@ import '@primer/primitives/dist/css/functional/themes/dark-dimmed.css'
 import '@primer/primitives/dist/css/functional/themes/light-high-contrast.css'
 import '@primer/primitives/dist/css/functional/themes/dark-high-contrast.css'
 import '@wooorm/starry-night/style/core'
-import './styles/app.css'
+import './styles/prv.css'
 import { App } from './App'
 import { createTransport } from './transport'
 import { useStore } from './store'
@@ -38,7 +38,7 @@ createTransport()
         ok: !s.error && !!s.snapshot && document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length > 0,
         error: s.error,
         files: s.snapshot?.files.length ?? 0,
-        rows: document.querySelectorAll('.diff-table tr').length,
+        rows: document.querySelectorAll('.DiffTable tr').length,
         highlighted: document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length,
         checks: s.checks.map((c) => c.name),
         title: document.title,

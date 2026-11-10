@@ -18,7 +18,13 @@ pub struct Commit {
     pub short: String,
     pub author: String,
     pub email: String,
+    /// Author date (ISO-8601).
     pub date: String,
+    pub committer: String,
+    /// Committer date (ISO-8601); GitHub shows and groups commits by it.
+    pub committer_date: String,
+    /// Names from `Co-authored-by:` trailers.
+    pub co_authors: Vec<String>,
     pub subject: String,
     pub body: String,
 }
@@ -87,6 +93,10 @@ pub struct Snapshot {
     pub dirty: bool,
     pub warnings: Vec<String>,
     pub editorconfig: Option<String>,
+    /// CODEOWNERS file of the base branch (path, contents), for the file header shield.
+    pub codeowners: Option<(String, String)>,
+    /// Files that conflict when merging head into base; None when unknown.
+    pub conflicts: Option<Vec<String>>,
     pub existing_pr: Option<ExistingPr>,
     pub generated_at: String,
 }

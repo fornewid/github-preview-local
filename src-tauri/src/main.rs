@@ -457,7 +457,7 @@ fn main() {
                     if !json {
                         eprint!("{c}");
                     }
-                    // Only the tail is kept for the JSON summary; the full output went to stderr.
+                    // Only the tail is kept for the summary; without --json the full output also streams to stderr.
                     output.push_str(c);
                     if output.len() > 64 * 1024 {
                         let mut cut = output.len() - 16 * 1024;

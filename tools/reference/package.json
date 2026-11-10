@@ -2,10 +2,16 @@
   "name": "prv-reference-tools",
   "private": true,
   "type": "module",
-  "description": "Capture github.com reference screenshots/styles and screenshot prv exports for side-by-side comparison (uses the locally installed Chrome).",
+  "description": "Measure the signed-in github.com pull request page and compare prv with it (uses the installed Google Chrome). See docs/design-sync.md.",
   "scripts": {
-    "capture": "node capture.mjs",
-    "shoot": "node shoot.mjs"
+    "login": "node login.mjs",
+    "snapshot": "node snapshot.mjs",
+    "states": "node states.mjs",
+    "states2": "node states2.mjs",
+    "dump": "node dump.mjs",
+    "primer-version": "node primer-version.mjs",
+    "local-states": "node local-states.mjs",
+    "ui-test": "node ui-test.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"

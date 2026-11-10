@@ -562,7 +562,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     let log = git.run(&[
         "log",
         "--reverse",
-        "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b%x1e",
+        "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%cI%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1d)%x1f%s%x1f%b%x1e",
         &format!("{merge_base}..{head_sha}"),
     ])?;
     let commits: Vec<Commit> = log
@@ -571,14 +571,17 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         .filter(|r| !r.trim().is_empty())
         .filter_map(|r| {
             let f: Vec<&str> = r.split('\x1f').collect();
-            (f.len() >= 7).then(|| Commit {
+            (f.len() >= 10).then(|| Commit {
                 sha: f[0].into(),
                 short: f[1].into(),
                 author: f[2].into(),
                 email: f[3].into(),
                 date: f[4].into(),
-                subject: f[5].into(),
-                body: f[6].trim().into(),
+                committer: f[5].into(),
+                committer_date: f[6].into(),
+                co_authors: co_authors(f[7]),
+                subject: f[8].into(),
+                body: f[9].trim().into(),
             })
         })
         .collect();
@@ -617,6 +620,11 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         .unwrap_or_default();
 
     let editorconfig = blob_text(git, &head_sha, ".editorconfig");
+    // GitHub reads CODEOWNERS from the base branch.
+    let codeowners = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
+        .iter()
+        .find_map(|p| blob_text(git, &base_sha, p).map(|t| (p.to_string(), t)));
+    let conflicts = if range.from.is_none() { merge_conflicts(git, &base_sha, &head_sha) } else { None };
     let snapshot = Snapshot {
         repo: RepoInfo {
             name: repo_name,
@@ -638,10 +646,51 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         dirty,
         warnings,
         editorconfig,
+        codeowners,
+        conflicts,
         existing_pr: None,
         generated_at: now_rfc3339(),
     };
     Ok(Resolved { snapshot, ends, remote })
+}
+
+/// Names from `Co-authored-by: Name <email>` trailer values (separated by \x1d), one per email
+/// address, like GitHub shows one avatar per account.
+fn co_authors(trailers: &str) -> Vec<String> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for t in trailers.split('\x1d') {
+        let mut it = t.splitn(2, '<');
+        let name = it.next().unwrap_or("").trim();
+        let email = it.next().unwrap_or("").trim_end_matches('>').trim().to_lowercase();
+        let key = if email.is_empty() { name.to_lowercase() } else { email };
+        if !name.is_empty() && !out.iter().any(|(k, _)| *k == key) {
+            out.push((key, name.to_string()));
+        }
+    }
+    out.into_iter().map(|(_, n)| n).collect()
+}
+
+/// Paths that conflict when merging `head` into `base` (empty when it merges cleanly).
+/// Uses `git merge-tree --write-tree` (git 2.38+), which does not touch the work tree or index.
+fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
+    let mut cmd = git.cmd();
+    cmd.args(["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head]);
+    let out = crate::proc::run(cmd, None, std::time::Duration::from_secs(30)).ok()?;
+    if out.timed_out {
+        return None;
+    }
+    match out.code {
+        // Output: the tree id, then (on conflicts) the conflicted paths, NUL separated.
+        Some(0) => Some(vec![]),
+        Some(1) => {
+            let mut parts = out.stdout.split('\0').filter(|p| !p.is_empty());
+            parts.next();
+            let mut paths: Vec<String> = parts.map(|p| p.to_string()).collect();
+            paths.dedup();
+            Some(paths)
+        }
+        _ => None,
+    }
 }
 
 fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
@@ -785,6 +834,13 @@ pub fn changed_paths(files: &[FileDiff]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn co_author_trailers() {
+        let t = "Claude Opus 5.5 <noreply@anthropic.com>\x1dClaude Fable 5.1 <noreply@anthropic.com>\x1dKim <k@x.io>";
+        assert_eq!(co_authors(t), vec!["Claude Opus 5.5".to_string(), "Kim".to_string()]);
+        assert!(co_authors("").is_empty());
+    }
 
     #[test]
     fn remote_urls() {

@@ -19,11 +19,19 @@ import { viewedKey } from './diff/util'
 
 export type DiffView = 'split' | 'unified'
 export type Tab = 'conversation' | 'commits' | 'checks' | 'files'
+export type Panel = 'overview' | 'comments' | 'merge'
 
 export interface Settings {
   diffView: DiffView
+  /** Effective "hide whitespace" (persisted only for "Always hide"). */
   hideWhitespace: boolean
+  /** "Hide for this diff only": not saved, applies to this preview. */
+  hideWhitespaceDiffOnly?: boolean
+  /** "Compact line height" (20px rows instead of 24px). */
+  compact: boolean
+  minimizeComments: boolean
   treeVisible: boolean
+  treeWidth: number
 }
 
 export interface CommentTarget {
@@ -52,7 +60,14 @@ const MAX_CHECK_OUTPUT = 200_000
 
 function loadSettings(): Settings {
   const fromUrl = new URLSearchParams(location.search)
-  let s: Settings = { diffView: 'unified', hideWhitespace: false, treeVisible: true }
+  let s: Settings = {
+    diffView: 'split',
+    hideWhitespace: false,
+    compact: true,
+    minimizeComments: false,
+    treeVisible: true,
+    treeWidth: 296,
+  }
   try {
     s = { ...s, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') }
   } catch {
@@ -77,6 +92,10 @@ export interface Store {
   error: string | null
   settings: Settings
   tab: Tab
+  panel: Panel | null
+  /** Open "Finish your review" overlay, with the event to preselect. */
+  reviewOpen: ReviewEvent | null
+  lastReview: PersistedState['lastReview']
   range: SnapshotQuery
   filter: { exts: string[] | null; showViewed: boolean; showDeleted: boolean; text: string }
   fileUI: Record<string, FileUI>
@@ -99,7 +118,9 @@ export interface Store {
   init(t: Transport): Promise<void>
   reload(q?: SnapshotQuery): Promise<void>
   setTab(t: Tab): void
-  applySettings(s: Partial<Settings>): void
+  applySettings(s: Partial<Settings>, persist?: boolean): void
+  setPanel(p: Panel | null): void
+  openReview(e: ReviewEvent | null): void
   setFilter(f: Partial<Store['filter']>): void
   toggleCollapsed(path: string, value?: boolean): void
   setGaps(path: string, gaps: Record<number, GapState> | undefined, whitespace: boolean): void
@@ -122,7 +143,7 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined
 const checkWaiters = new Map<string, (s: CheckStatus) => void>()
 
 function stateOf(s: Store): PersistedState {
-  return { viewed: s.viewed, drafts: s.drafts, prTitle: s.prTitle, prBody: s.prBody }
+  return { viewed: s.viewed, drafts: s.drafts, prTitle: s.prTitle, prBody: s.prBody, lastReview: s.lastReview }
 }
 
 /** Saves immediately (comments, viewed) or debounced (typing in title/description). */
@@ -143,6 +164,9 @@ export const useStore = create<Store>((set, get) => ({
   error: null,
   settings: loadSettings(),
   tab: 'files',
+  panel: null,
+  reviewOpen: null,
+  lastReview: null,
   range: {},
   filter: { exts: null, showViewed: true, showDeleted: true, text: '' },
   fileUI: {},
@@ -173,6 +197,7 @@ export const useStore = create<Store>((set, get) => ({
         drafts: st.drafts ?? [],
         prTitle: st.prTitle || snapshot.title,
         prBody: st.prBody ?? snapshot.body,
+        lastReview: st.lastReview ?? null,
       })
     } catch (e) {
       set({ error: String(e), loading: false })
@@ -232,10 +257,27 @@ export const useStore = create<Store>((set, get) => ({
     window.scrollTo({ top: 0 })
   },
 
-  applySettings(s) {
+  applySettings(s, persist = true) {
     const settings = { ...get().settings, ...s }
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+    if (persist) {
+      // "Hide for this diff only" is never saved.
+      const saved = { ...settings, hideWhitespace: settings.hideWhitespaceDiffOnly ? false : settings.hideWhitespace }
+      delete saved.hideWhitespaceDiffOnly
+      try {
+        const prev = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}')
+        if (settings.hideWhitespaceDiffOnly) saved.hideWhitespace = !!prev.hideWhitespace
+      } catch {
+        /* ignore */
+      }
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved))
+    }
     set({ settings })
+  },
+
+  setPanel: (panel) => set({ panel }),
+  openReview: (reviewOpen) => {
+    if (reviewOpen && get().tab !== 'files') get().setTab('files')
+    set({ reviewOpen })
   },
 
   setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
@@ -380,7 +422,12 @@ export const useStore = create<Store>((set, get) => ({
     }
     const markdown = formatReview(result, snapshot)
     clearTimeout(saveTimer)
-    set({ busy: null, submitted: { result, markdown }, drafts: [] })
+    set({
+      busy: null,
+      submitted: { result, markdown },
+      drafts: [],
+      lastReview: { head: snapshot.head.sha, at: new Date().toISOString() },
+    })
     // Persist the cleared drafts *before* the native window exits (the native side clears them too).
     try {
       await transport.saveState(snapshot, stateOf(get()))

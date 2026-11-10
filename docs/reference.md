@@ -1,69 +1,70 @@
 # Reference measurements (github.com, November 2026)
 
-Measured with Chrome (headless, 1440×900, DPR 2) on
-`https://github.com/webtoon/ReadMoreTextView/pull/127/files?diff=split&w=0`
-using `tools/reference/capture.mjs`. Signed-out visitors get the classic
-"Files changed" page (`/pull/N/changes` redirects to `/files`), which is what
-prv reproduces.
+prv reproduces the **new "Files changed" experience** that github.com shows signed-in users
+(on by default since 2026-01-22, URL `/pull/N/changes`). Signed-out visitors still get the classic
+page, so the reference is captured with a signed-in Chrome profile (see
+[design-sync.md](design-sync.md)): Chrome 1440×900, DPR 2, on
+`https://github.com/webtoon/ReadMoreTextView/pull/127/changes`.
 
-All colors are Primer primitives tokens, so every GitHub theme (light, dark,
-dimmed, high contrast, colorblind) works by switching
-`<html data-color-mode data-light-theme data-dark-theme>`.
+## Building blocks
 
-## Typography
+| Part | github.com | prv |
+|---|---|---|
+| Components (buttons, menus, dialogs, tree, page layout, header) | `@primer/react` CSS modules (`prc-*`), release matched by class hash: 38.42–38.45 | `@primer/react` **38.45.0** |
+| Color tokens | Primer primitives light/dark themes | `@primer/primitives` **11.10.0** (0 differing tokens) |
+| Diff table, file header, toolbar, comment box | GitHub's own CSS modules | `ui/src/styles/prv.css`, rewritten from the values below |
+| Syntax highlighting | `pl-*` classes | starry-night with GitHub's grammars (`pl-*`) |
+| UI font | `"Mona Sans VF", -apple-system, system-ui, "Segoe UI", …` — Mona Sans is **not loaded** signed in, so the system font renders | same stack, nothing bundled |
+| Code font | `--fontStack-monospace` (`ui-monospace, SFMono-Regular, SF Mono, Menlo, …`) | same |
 
-| Element | Value |
-|---|---|
-| UI font | `--fontStack-system` → **Mona Sans VF**, -apple-system, … (bundled, SIL OFL) |
-| Code font | `--fontStack-monospace` → ui-monospace, SFMono-Regular, SF Mono, Menlo, … 12px / 20px |
-| PR title | 32px / 40px, weight 400; number weight 300, `--fgColor-muted` |
-| Tabs | 14px / 23px, padding 8px 16px; selected tab has borders + radius 6px 6px 0 0 |
-| Counter | 12px / 18px, weight 500, padding 0 6px, radius 2em, `--bgColor-neutral-muted` |
-| Toolbar items | 12px / 18px, `--fgColor-muted`, bold part weight 600 |
-
-## Layout
+## Page
 
 | Element | Value |
 |---|---|
-| Page padding | 32px (at ≥1280px) |
-| Tab nav | margin 0 -16px 16px, border-bottom 1px `--borderColor-default`, height 40px |
-| Toolbar (`.pr-toolbar`) | sticky top 0, height 60px, margin -16px -32px 0, padding 8px 32px |
-| Sidebar | 296px, sticky top 60px, grid gap 16px |
-| Tree filter input | height 32px, padding 5px 12px 5px 32px, radius 6px |
-| Tree item | min-height 32px, padding 6px 8px, radius 6px |
-| File box | border 1px `--borderColor-default`, radius 6px, margin-bottom 16px |
-| File header | sticky top 60px, padding 4px 8px, `--bgColor-muted`, mono 12px / 32px |
+| Page padding | 32px (≥1012px), 24px (≥768px), 16px |
+| PR header | Primer `PageHeader`: title 32px/40px weight 400, number weight 300 muted, edit `IconButton` 32px; actions (*Merge status*) margin-top 8px; description padding-top 8px (`StateLabel` 32px tall, summary muted, `BranchName` accent); navigation padding-top 16px |
+| Tabs | 14px / 22.96px, padding 8px 12px, selected: `--bgColor-default`, 1px border, radius 6px 6px 0 0; `CounterLabel` margin-left 8px; diffstat right, padding-top 12px |
+| Conversation / Commits | centered `container-xl` (1280px including 32px padding) |
+| Side panel (Overview, Comments, Merge status) | `PageLayout.Sidebar`, 484px, sticky top 0, full height; header 49px (padding 8px); actions move above the title while open |
+
+## Files changed
+
+| Element | Value |
+|---|---|
+| Toolbar | sticky top 0, height 60px, padding 16px 0, gap 8px, border-bottom 1px; small (28px) buttons: tree toggle, *All commits*, viewed progress (12px/18px), divider 28px, *Submit review* (primary), gear, divider, overview, comments (with counter) |
+| File tree | `PageLayout.Pane` start, 296px, resizable, sticky below the toolbar, divider 1px + 16px gap; filter `TextInput` 32px + filter `IconButton`; `TreeView` rows 32px; status icons `file-diff` (muted), `file-added` (success), `file-removed` (danger), `file-moved` |
+| Diff list | gap 16px, content padding 16px 0 40px |
+| File header | sticky top 58px, padding 6px 8px, min-height 42px, `--bgColor-muted`, radius 6px 6px 0 0; chevron, CODEOWNERS `shield-lock`, path (`code` 12px/18px, truncated at the start), copy, expand all; right: `+N -N` (12px semibold) + five 8px squares, *Viewed* button, comment, kebab |
+| Body | 1px border, radius 0 0 6px 6px; `table-layout: fixed` |
 
 ## Diff table
 
 | Element | Value |
 |---|---|
-| Split columns | `<col width=44><col><col width=44><col>`, `table-layout: fixed` |
-| Unified number cells | `width: 1%; min-width: 50px` (auto layout) |
-| Number cell | padding 0 10px, mono 12px / 20px, right aligned, `::before { content: attr(data-line-number) }` |
-| Code cell | padding 0 10px 0 22px; marker `::before { content: attr(data-code-marker) }` at left 8px |
-| Wrapping | `white-space: pre-wrap; overflow-wrap: anywhere` (long lines wrap) |
-| Addition line / number / word | `--diffBlob-additionLine-bgColor` #dafbe1 / `-additionNum-` #aceebb / `-additionWord-` #aceebb |
-| Deletion line / number / word | #ffebe9 / #ffcecb / #ffcecb |
-| Empty cell (split) | `--diffBlob-emptyLine-bgColor` #f6f8fa |
-| Hunk row | `--diffBlob-hunkLine-bgColor` #ddf4ff, padding 4px 10px 4px 22px, height 28px |
-| Hunk number cell | `--diffBlob-hunkNum-bgColor-rest` #b6e3ff; hover `--bgColor-accent-emphasis` |
-| Right split side | `border-left: 1px solid --borderColor-muted` |
-| Word highlight | `.x` with `border-radius: .2em` on `x-first`/`x-last` |
+| Line height | 20px with *Compact line height* (default here), otherwise 24px; hunk rows min 24px |
+| Columns | split: 44px · code · 44px · code; unified: 44px · 44px · code |
+| Line number | mono 12px, centered; context lines `--fgColor-muted`, changed lines `--fgColor-default`; backgrounds `--diffBlob-{addition,deletion}Num-bgColor` |
+| Code cell | padding 0 24px 0 20px (line height), mono 12px, `white-space: pre-wrap`; marker `+`/`-` absolute at 8px; backgrounds `--diffBlob-{addition,deletion}Line-bgColor`; empty side `--diffBlob-emptyLine-bgColor` |
+| Word highlights | `.x` with `--diffBlob-{addition,deletion}Word-*`, rounded ends (`x-first`, `x-last`) |
+| Hunk row | `--bgColor-accent-muted`; expander 44px (88px unified) × 24px on `--diffBlob-hunkNum-bgColor-rest`, hover `--bgColor-accent-emphasis`; labels *Expand file up from line N*, *Expand file down from line N*, *Expand file from line A to line B*; a first hunk without expander shows a kebab |
+| Expanding | 20 lines per click; gaps ≤ 20 lines get one *expand all* button, larger ones down + up; the first hunk header stays, recomputed (`@@ -1,38 +1,45 @@`) |
+| Add comment | blue 22px button over the start of the code cell on hover |
 
-## Behaviors
+## Comments and review
 
-- **Diff**: `git diff merge-base(base, head)..head` (three-dot), rename detection, `-U3`.
-- **Hide whitespace**: re-diff with `--ignore-all-space` (`?w=1`).
-- **Expanders**: before the first hunk → *Expand Up*; between hunks → *Expand All* when
-  the gap ≤ 20 lines, otherwise *Expand Down* + *Expand Up*; after the last hunk →
-  *Expand Down*. Each click reveals 20 lines. Size-0 leading gap shows a static `...`.
-- **Diffstat**: 5 blocks; `floor(add/total*5)` green, `floor(del/total*5)` red, rest gray
-  (each change is one block when total ≤ 5).
-- **Path truncation**: longer than 92 chars → `...` + last 89 chars.
-- **Settings (gear)**: *Diff view* (Unified / Split, with pictures), *Hide whitespace*,
-  *Apply and reload*.
-- **Toolbar**: file tree toggle, *Changes from all commits* (commit / shift-click range),
-  *File filter* (by extension, *Viewed files*, *Deleted files*), *Conversations*, gear.
-- **File menu (…)**: *Show comments*, *View file*, *Edit file*, *Delete file*, *Open in desktop*.
-- **Viewed**: collapses the file; resets when the file changes.
+| Element | Value |
+|---|---|
+| Comment box | 1px border, radius 6px; header 38px `--bgColor-muted` with *Write / Preview* tabs (padding 9px 16px) and the formatting `ActionBar` (heading, bold, italic, quote, code, link · lists, task list · mention, reference, suggestion); textarea 5 rows (121px) |
+| Inline form | box with avatar + *Add a comment on line L18*, buttons *Cancel*, *Comment*, *Start a review* (*Add review comment* once a review is pending) |
+| Finish your review | `AnchoredOverlay` 640px, title 14px semibold, body padding 16px, radio options 14px semibold + 12px captions (47px apart), footer *Cancel* / *Submit review* with ⌘⏎ hint |
+| Settings menu | *Layout* (Unified / Split) · *Whitespace changes* submenu (Always show / Always hide / Hide for this diff only) · *Minimize comments* (`i`) · *Compact line height* |
+| Commit picker | `Dialog` 480 × 640: *All commits*, *Changes since your last review*, *Select a range of commits* (checkbox list) |
+
+## Not reproduced on purpose
+
+- github.com's global header and repository navigation (Code, Issues, …): prv shows a small
+  repository bar instead; the GitHub logo is not used.
+- *Code*, *Preview* (feature preview), Copilot and *Paste, drop, or click to add files*: they act
+  on github.com and have no local meaning.
+- File menu items *View file / Edit file / Delete file*: replaced by *Open in editor* and
+  *Copy file path*.
