@@ -317,8 +317,8 @@ function MergePanel() {
   const sub = summary.total
     ? `${parts.join(', ')} ${summary.total === 1 ? 'check' : 'checks'}`
     : transport.capabilities.checks
-      ? 'Add a .prv.toml to define checks.'
-      : 'Open this preview with prv to run them.'
+      ? 'Add a .gh-prv-local.toml to define checks.'
+      : 'Open this preview with gh-prv-local to run them.'
   const conflicts = s.conflicts
   const pr = existing?.pr ?? s.existingPr
   return (
@@ -373,7 +373,7 @@ function MergePanel() {
         </Button>
         <p className="MergePanel-note">
           {!transport.capabilities.publish
-            ? 'Publishing is available in the native window (`prv`).'
+            ? 'Publishing is available in the native window (`gh-prv-local`).'
             : range.from
               ? 'Switch back to all commits to confirm.'
               : existing?.error

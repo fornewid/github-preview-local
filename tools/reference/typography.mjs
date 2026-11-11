@@ -1,4 +1,4 @@
-// Compares the text styles of a signed-in github.com pull request with a prv export, tab by tab.
+// Compares the text styles of a signed-in github.com pull request with a gh-prv-local export, tab by tab.
 // Text that appears on both pages (tab labels, buttons, commit titles, file names, code lines, …)
 // is paired by its content; every pair whose font differs is printed: the font Chrome really
 // draws with (not just the CSS stack), size, weight, line height, letter spacing, color, font
@@ -190,9 +190,9 @@ for (const tab of tabs) {
       .join(', ')
   }
   console.log(`\n## ${tab} (${width}px): ${pairs.length} texts on both pages, ${diffs.length} styled differently`)
-  console.log(`fonts: github ${fonts(pairs.map(([a]) => a))}\n       prv    ${fonts(pairs.map(([, b]) => b))}`)
+  console.log(`fonts: github       ${fonts(pairs.map(([a]) => a))}\n       gh-prv-local ${fonts(pairs.map(([, b]) => b))}`)
   for (const { a, b, what, texts } of groups.values()) {
-    console.log(`- "${texts[0]}"${texts.length > 1 ? ` (+${texts.length - 1})` : ''}  gh ${a.tag}.${a.cls} / prv ${b.tag}.${b.cls}\n    ${what}`)
+    console.log(`- "${texts[0]}"${texts.length > 1 ? ` (+${texts.length - 1})` : ''}  gh ${a.tag}.${a.cls} / gh-prv-local ${b.tag}.${b.cls}\n    ${what}`)
   }
   console.log(`icons: ${iconPairs} on both pages, ${iconDiffs.length} colored differently`)
   for (const line of new Set(iconDiffs)) console.log(line)

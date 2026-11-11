@@ -1,4 +1,4 @@
-// Dumps the subtree under a CSS selector of a signed-in GitHub page (or a local prv export):
+// Dumps the subtree under a CSS selector of a signed-in GitHub page (or a local gh-prv-local export):
 // tag, classes, label, text, box and the main computed styles of every visible element.
 //
 //   node dump.mjs <url | path/to/preview.html> <selector> [light|dark] [width] [--click selector]...

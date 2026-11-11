@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
 # End-to-end test of the native window's native-only features. The window clicks through the
-# real UI (PRV_SELFTEST=flows):
+# real UI (GH_PRV_LOCAL_SELFTEST=flows):
 #
 #   - commit range: pick one commit in the commit picker, then All commits again
 #   - local checks: Run all (a passing, a failing and a slow check), cancel the slow one
 #   - Confirm: push the branch and open the pull request
 #
-#   scripts/native-selftest.sh [--prv path/to/prv]
-#       Offline. The scratch repository's `origin` looks like github.com (so prv knows the
-#       repository) but pushes to a local bare repository, and a stand-in `gh` records what prv
+#   scripts/native-selftest.sh [--bin path/to/gh-prv-local]
+#       Offline. The scratch repository's `origin` looks like github.com (so gh-prv-local knows the
+#       repository) but pushes to a local bare repository, and a stand-in `gh` records what gh-prv-local
 #       asks of the GitHub CLI and answers like it. Nothing leaves this machine.
 #
-#   scripts/native-selftest.sh --github OWNER/REPO [--prv path/to/prv]
+#   scripts/native-selftest.sh --github OWNER/REPO [--bin path/to/gh-prv-local]
 #       Against a real repository you own (e.g. a private scratch one): pushes a new branch
 #       `selftest-<time>` and opens a real pull request into `main` with your `gh` login.
 #       The pull request is left open for you to look at.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PRV="$ROOT/src-tauri/target/release/prv"
+PRV="$ROOT/src-tauri/target/release/gh-prv-local"
 GH_REPO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --github) GH_REPO="$2"; shift 2 ;;
-    --prv) PRV="$2"; shift 2 ;;
-    *) echo "usage: $0 [--github OWNER/REPO] [--prv path/to/prv]" >&2; exit 2 ;;
+    --bin) PRV="$2"; shift 2 ;;
+    *) echo "usage: $0 [--github OWNER/REPO] [--bin path/to/gh-prv-local]" >&2; exit 2 ;;
   esac
 done
-[ -x "$PRV" ] || { echo "prv not found at $PRV (build it, or pass --prv)" >&2; exit 1; }
+[ -x "$PRV" ] || { echo "gh-prv-local not found at $PRV (build it, or pass --bin)" >&2; exit 1; }
 PRV="$(cd "$(dirname "$PRV")" && pwd)/$(basename "$PRV")" # the script works in another directory
 # Never act on the repository this is run from (e.g. inside a git hook) and never prompt.
 unset $(git rev-parse --local-env-vars 2>/dev/null) || true
 export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1
-# timed SECONDS command...: TERM when time is up (prv then exits the normal way and stops its
+# timed SECONDS command...: TERM when time is up (gh-prv-local then exits the normal way and stops its
 # checks), KILL 5s later; the command's exit status otherwise.
 timed() {
   perl -e 'my $t = shift; my $pid = fork; die "fork: $!\n" unless defined $pid;
@@ -41,25 +41,26 @@ timed() {
     alarm $t; waitpid $pid, 0; my $s = $?;
     exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' "$@"
 }
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/prv-selftest.XXXXXX")
-trap 'cp "$WORK/out.txt" "${PRV_SELFTEST_KEEP:-/dev/null}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/gh-prv-local-selftest.XXXXXX")
+trap 'cp "$WORK/out.txt" "${GH_PRV_LOCAL_SELFTEST_KEEP:-/dev/null}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 TOKEN="31.$$" # the slow check sleeps this long: a unique command line to look for afterwards
 
 # --- Scratch repository: main + a branch with two commits, three local checks on main ---
 git init -q --template= -b main "$WORK/repo"
 cd "$WORK/repo"
-git config user.name "prv selftest"
+git config user.name "gh-prv-local selftest"
 git config user.email "selftest@example.invalid"
 git config commit.gpgsign false
 git config core.hooksPath /dev/null # no global hooks in the scratch repository
-touch "$(git rev-parse --git-path prv-selftest)" # prv only runs PRV_SELFTEST=flows where this exists
+# gh-prv-local only runs GH_PRV_LOCAL_SELFTEST=flows where this marker exists.
+touch "$(git rev-parse --git-path gh-prv-local-selftest)"
 initial_commit() {
-  printf 'Scratch repository for prv end-to-end tests.\n' > README.md
+  printf 'Scratch repository for gh-prv-local end-to-end tests.\n' > README.md
   git add -A && git commit -q -m "Initial commit"
 }
 # The local checks, not committed (whatever the remote has): passing, failing, slow.
 write_checks() {
-  cat > .prv.toml <<TOML
+  cat > .gh-prv-local.toml <<TOML
 [[checks]]
 name = "lint"
 run = "echo lint ok"
@@ -74,9 +75,9 @@ run = "echo started; sleep $TOKEN"
 TOML
   local exclude
   exclude=$(git rev-parse --git-path info/exclude)
-  mkdir -p "$(dirname "$exclude")" && echo .prv.toml >> "$exclude"
-  if git ls-files --error-unmatch .prv.toml > /dev/null 2>&1; then
-    git update-index --skip-worktree .prv.toml
+  mkdir -p "$(dirname "$exclude")" && echo .gh-prv-local.toml >> "$exclude"
+  if git ls-files --error-unmatch .gh-prv-local.toml > /dev/null 2>&1; then
+    git update-index --skip-worktree .gh-prv-local.toml
   fi
 }
 
@@ -100,7 +101,7 @@ if [ -n "$GH_REPO" ]; then
   timed 120 git fetch -q origin main
   PATH_PREFIX=""
 else
-  REPO_ID="prv-selftest/sample"
+  REPO_ID="gh-prv-local-selftest/sample"
   BRANCH="feature"
   git init -q --bare --template= -b main "$WORK/remote.git"
   git -C "$WORK/remote.git" config core.hooksPath /dev/null
@@ -113,18 +114,18 @@ else
   mkdir "$WORK/bin"
   cat > "$WORK/bin/gh" <<'SH'
 #!/bin/sh
-printf '%s\n' "$*" >> "$PRV_GH_LOG"
-printf 'GH_TELEMETRY=%s DO_NOT_TRACK=%s GH_NO_UPDATE_NOTIFIER=%s\n' "$GH_TELEMETRY" "$DO_NOT_TRACK" "$GH_NO_UPDATE_NOTIFIER" >> "$PRV_GH_LOG.env"
+printf '%s\n' "$*" >> "$GH_PRV_LOCAL_GH_LOG"
+printf 'GH_TELEMETRY=%s DO_NOT_TRACK=%s GH_NO_UPDATE_NOTIFIER=%s\n' "$GH_TELEMETRY" "$DO_NOT_TRACK" "$GH_NO_UPDATE_NOTIFIER" >> "$GH_PRV_LOCAL_GH_LOG.env"
 case "$1 $2" in
-  "auth status") echo "github.com: logged in (prv selftest)"; exit 0 ;;
+  "auth status") echo "github.com: logged in (gh-prv-local selftest)"; exit 0 ;;
   "pr list") echo "[]"; exit 0 ;;
-  "pr create") cat > "$PRV_GH_LOG.body"; echo "https://github.com/prv-selftest/sample/pull/1"; exit 0 ;;
+  "pr create") cat > "$GH_PRV_LOCAL_GH_LOG.body"; echo "https://github.com/gh-prv-local-selftest/sample/pull/1"; exit 0 ;;
 esac
-echo "prv selftest gh: unexpected call: $*" >&2
+echo "gh-prv-local selftest gh: unexpected call: $*" >&2
 exit 1
 SH
   chmod +x "$WORK/bin/gh"
-  export PRV_GH_LOG="$WORK/gh.log"
+  export GH_PRV_LOCAL_GH_LOG="$WORK/gh.log"
   PATH_PREFIX="$WORK/bin:"
 fi
 git remote set-head origin main
@@ -141,7 +142,7 @@ run_round() {
   local head_sha remote_sha pr_url pr_json leftover code
   head_sha=$(git rev-parse HEAD)
   set +e
-  PATH="$PATH_PREFIX$PATH" PRV_SELFTEST=flows timed 900 "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
+  PATH="$PATH_PREFIX$PATH" GH_PRV_LOCAL_SELFTEST=flows timed 900 "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
   code=$?
   set -e
   if [ -n "$GH_REPO" ]; then

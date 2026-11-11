@@ -1,6 +1,6 @@
-//! prv — preview your branch as a GitHub pull request, locally.
+//! gh-prv-local — preview your branch as a GitHub pull request, locally.
 //!
-//! `prv` opens a native window (system WebView, Tauri IPC — no web server)
+//! `gh-prv-local` opens a native window (system WebView, Tauri IPC — no web server)
 //! showing the branch the way GitHub's "Files changed" tab would. When you
 //! submit a review the result is printed to stdout, so AI agents such as
 //! Claude Code can act on it. "Confirm" pushes the branch and opens the PR.
@@ -25,7 +25,7 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder}
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "prv",
+    name = "gh-prv-local",
     version,
     about = "Preview your branch as a GitHub pull request, locally.",
     long_about = "Opens your branch in a GitHub-style \"Files changed\" view (merge-base...HEAD, like a pull request).\n\
@@ -116,12 +116,15 @@ fn fnv(s: &str) -> u32 {
     s.bytes().fold(0x811c9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x01000193))
 }
 
+/// Per-repository state (pending comments, viewed files, the last review), inside the git dir.
+pub const STATE_DIR: &str = "gh-prv-local";
+
 fn state_file(git: &Git, branch: &str) -> PathBuf {
     let safe: String = branch
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
         .collect();
-    git.git_path("prv").join(format!("state-{safe}-{:08x}.json", fnv(branch)))
+    git.git_path(STATE_DIR).join(format!("state-{safe}-{:08x}.json", fnv(branch)))
 }
 
 fn is_sha(s: &str) -> bool {
@@ -194,11 +197,11 @@ fn list_checks(app: State<'_, AppState>) -> Result<Vec<CheckDef>, String> {
 
 fn check_env(snap: &Snapshot) -> Vec<(String, String)> {
     vec![
-        ("PRV_BASE".into(), snap.base.reference.clone()),
-        ("PRV_BASE_SHA".into(), snap.base.sha.clone()),
-        ("PRV_HEAD".into(), snap.head.sha.clone()),
-        ("PRV_MERGE_BASE".into(), snap.merge_base.clone()),
-        ("PRV_CHANGED_FILES".into(), git::changed_paths(&snap.files)),
+        ("GH_PRV_LOCAL_BASE".into(), snap.base.reference.clone()),
+        ("GH_PRV_LOCAL_BASE_SHA".into(), snap.base.sha.clone()),
+        ("GH_PRV_LOCAL_HEAD".into(), snap.head.sha.clone()),
+        ("GH_PRV_LOCAL_MERGE_BASE".into(), snap.merge_base.clone()),
+        ("GH_PRV_LOCAL_CHANGED_FILES".into(), git::changed_paths(&snap.files)),
     ]
 }
 
@@ -283,7 +286,7 @@ fn submit_review(handle: tauri::AppHandle, app: State<'_, AppState>, result: ser
     handle.exit(0);
 }
 
-/// `PRV_SELFTEST=flows`: a progress report from the UI that does not end the run (the run ends
+/// `GH_PRV_LOCAL_SELFTEST=flows`: a progress report from the UI that does not end the run (the run ends
 /// the normal way, through Confirm). Ignored outside self-tests.
 #[tauri::command]
 fn selftest_log(app: State<'_, AppState>, report: serde_json::Value) {
@@ -294,7 +297,7 @@ fn selftest_log(app: State<'_, AppState>, report: serde_json::Value) {
     let _ = std::io::stdout().flush();
 }
 
-/// End-to-end check used by `PRV_SELFTEST=1 prv`: the UI reports what it rendered. Leaves through
+/// End-to-end check used by `GH_PRV_LOCAL_SELFTEST=1 gh-prv-local`: the UI reports what it rendered. Leaves through
 /// the normal exit, which also stops checks still running (exit code 0 when ok, else 3).
 #[tauri::command]
 fn selftest_done(handle: tauri::AppHandle, app: State<'_, AppState>, report: serde_json::Value) {
@@ -333,7 +336,7 @@ fn open_in_editor(app: State<'_, AppState>, path: String, line: Option<u32>) -> 
     let f = app.git.root.join(&path).to_string_lossy().into_owned();
     let target = format!("{f}:{}", line.unwrap_or(1));
     let spawn = |prog: &str, args: &[&str]| std::process::Command::new(prog).args(args).spawn().is_ok();
-    if let Ok(editor) = std::env::var("PRV_EDITOR") {
+    if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
         if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {
             return Ok(());
         }
@@ -352,7 +355,7 @@ fn open_in_editor(app: State<'_, AppState>, path: String, line: Option<u32>) -> 
     if ok {
         Ok(())
     } else {
-        Err("no editor found: install the VS Code `code` command or set PRV_EDITOR (e.g. PRV_EDITOR=gedit)".into())
+        Err("no editor found: install the VS Code `code` command or set GH_PRV_LOCAL_EDITOR (e.g. GH_PRV_LOCAL_EDITOR=gedit)".into())
     }
 }
 
@@ -391,7 +394,7 @@ fn print_result(format: Format, result: &Option<(serde_json::Value, String)>) {
 }
 
 fn fail(msg: impl std::fmt::Display) -> ! {
-    eprintln!("prv: {msg}");
+    eprintln!("gh-prv-local: {msg}");
     std::process::exit(1)
 }
 
@@ -408,7 +411,7 @@ fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 fn main() {
-    // prv talks to the repository's origin only. The GitHub CLI (used on Confirm and to find an
+    // gh-prv-local talks to the repository's origin only. The GitHub CLI (used on Confirm and to find an
     // open pull request) would otherwise send telemetry and check for updates; every child
     // process (gh, git and its credential helpers, local checks) inherits these.
     for (key, value) in [
@@ -435,7 +438,7 @@ fn main() {
                     p
                 }
                 None => {
-                    let name: String = format!("prv-{}-{}", r.snapshot.repo.name, r.snapshot.head.name)
+                    let name: String = format!("gh-prv-local-{}-{}", r.snapshot.repo.name, r.snapshot.head.name)
                         .chars()
                         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
                         .collect();
@@ -474,7 +477,7 @@ fn main() {
                 .filter(|d| names.is_empty() || names.contains(&d.name))
                 .collect();
             if defs.is_empty() {
-                fail("no checks found (add a .prv.toml)");
+                fail("no checks found (add a .gh-prv-local.toml)");
             }
             static STOP: AtomicBool = AtomicBool::new(false);
             // Ctrl-C / SIGTERM: stop the running check's whole process group, then exit.
@@ -515,7 +518,7 @@ fn main() {
                 results.push(serde_json::json!({ "name": d.name, "run": d.run, "success": ok, "exitCode": code, "outputTail": tail }));
             }
             if STOP.load(Ordering::SeqCst) {
-                eprintln!("prv: interrupted");
+                eprintln!("gh-prv-local: interrupted");
                 std::process::exit(130);
             }
             let failed = results.iter().filter(|r| r["success"] == false).count();
@@ -541,20 +544,20 @@ fn is_app_url(url: &tauri::Url) -> bool {
 fn run_window(git: Git, opts: Options, format: Format) {
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        fail("no display available. Use `prv export` to write a static HTML preview instead.");
+        fail("no display available. Use `gh-prv-local export` to write a static HTML preview instead.");
     }
     let title = format!(
         "Pull request preview · {}",
         git.root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
     );
-    let selftest = std::env::var_os("PRV_SELFTEST").is_some();
-    let flows = std::env::var("PRV_SELFTEST").as_deref() == Ok("flows");
+    let selftest = std::env::var_os("GH_PRV_LOCAL_SELFTEST").is_some();
+    let flows = std::env::var("GH_PRV_LOCAL_SELFTEST").as_deref() == Ok("flows");
     // `flows` clicks Confirm, which pushes and opens a pull request: only in a scratch repository
     // that scripts/native-selftest.sh prepared (and marked).
     if flows {
-        let marker = git.line(&["rev-parse", "--git-path", "prv-selftest"]).map(|p| git.root.join(p));
+        let marker = git.line(&["rev-parse", "--git-path", "gh-prv-local-selftest"]).map(|p| git.root.join(p));
         if !marker.is_some_and(|p| p.exists()) {
-            fail("PRV_SELFTEST=flows pushes and opens a pull request, so it only runs in a scratch repository prepared by scripts/native-selftest.sh");
+            fail("GH_PRV_LOCAL_SELFTEST=flows pushes and opens a pull request, so it only runs in a scratch repository prepared by scripts/native-selftest.sh");
         }
     }
     let state = AppState {
@@ -589,7 +592,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
-            // Ctrl-C / SIGTERM / SIGHUP (e.g. the agent stops prv): exit cleanly so running checks are killed.
+            // Ctrl-C / SIGTERM / SIGHUP (e.g. the agent stops gh-prv-local): exit cleanly so running checks are killed.
             let handle = app.handle().clone();
             proc::on_terminate(move || handle.exit(130));
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))

@@ -1,9 +1,11 @@
 // Native self-tests (the window itself, through Tauri IPC):
 //
-//   PRV_SELFTEST=1 prv       render, highlight and zoom, then exit with a report
-//   PRV_SELFTEST=flows prv   also click through a commit range, the local checks and Confirm
-//                            (push + pull request). Only in a scratch repository prepared by
-//                            scripts/native-selftest.sh (prv refuses otherwise).
+//   GH_PRV_LOCAL_SELFTEST=1 gh-prv-local
+//       render, highlight and zoom, then exit with a report
+//   GH_PRV_LOCAL_SELFTEST=flows gh-prv-local
+//       also click through a commit range, the local checks and Confirm (push + pull request).
+//       Only in a scratch repository prepared by scripts/native-selftest.sh (gh-prv-local
+//       refuses otherwise).
 import { canConfirm, useStore } from './store'
 
 type Report = Record<string, unknown>
@@ -37,7 +39,7 @@ function progress(step: string) {
   if (verbose) return invoke('selftest_log', { report: { progress: step, at: Math.round(performance.now()), visibility: document.visibilityState } })
 }
 
-/** Render, syntax highlighting and zoom (PRV_SELFTEST=1). */
+/** Render, syntax highlighting and zoom (GH_PRV_LOCAL_SELFTEST=1). */
 async function basic(): Promise<Report & { ok: boolean }> {
   const s = useStore.getState()
   // Zoom like Cmd+= does (not saved): the page must lay out for the smaller CSS width. A zoom the
@@ -169,7 +171,7 @@ async function confirm(): Promise<void> {
   click($('.ReviewForm-submit'), 'Confirm and create pull request')
   await until('publishing started', () => st().busy || st().reviewDraft.error, 5000)
   // Success ends the app (the result goes to stdout); a failure is kept in the review draft. The
-  // wait covers prv's own timeouts: three gh calls (120s each) and the push (300s).
+  // wait covers gh-prv-local's own timeouts: three gh calls (120s each) and the push (300s).
   await until('publish result', () => st().reviewDraft.error, 700000)
   throw new Error(`Confirm failed: ${st().reviewDraft.error}`)
 }

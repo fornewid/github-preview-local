@@ -22,8 +22,8 @@
           return data.contents[`${args.side}:${args.path}`] ?? null
         case 'list_checks':
           return [
-            { name: 'lint', run: 'npm run lint', source: '.prv.toml' },
-            { name: 'unit tests', run: './gradlew testDebugUnitTest --console=plain', source: '.prv.toml' },
+            { name: 'lint', run: 'npm run lint', source: '.gh-prv-local.toml' },
+            { name: 'unit tests', run: './gradlew testDebugUnitTest --console=plain', source: '.gh-prv-local.toml' },
           ]
         case 'run_check':
           setTimeout(() => emit('check-event', { name: args.name, status: 'running' }), 50)

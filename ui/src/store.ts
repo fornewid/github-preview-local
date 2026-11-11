@@ -227,7 +227,7 @@ export const useStore = create<Store>((set, get) => ({
       return
     }
     if (!t.capabilities.checks) return
-    // A broken .prv.toml only affects the Checks tab.
+    // A broken .gh-prv-local.toml only affects the Checks tab.
     try {
       const defs = await t.listChecks()
       set({ checks: defs.map((d) => ({ ...d, status: 'idle', output: '' })) })

@@ -1,4 +1,4 @@
-//! `prv export`: a single self-contained HTML file (UI + data). Opens from
+//! `gh-prv-local export`: a single self-contained HTML file (UI + data). Opens from
 //! disk with `file://` — no server. Review comments can be copied for an AI agent.
 
 use crate::git::{contents, read_blobs, Git, Resolved};

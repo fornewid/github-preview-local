@@ -1901,7 +1901,7 @@ h3 {
   margin: 0 0.2em 0.25em -1.4em;
   vertical-align: middle;
 }
-/* An image prv does not load (common.tsx blockedImage): its name, linking to it when remote. */
+/* An image gh-prv-local does not load (common.tsx blockedImage): its name, linking to it when remote. */
 .markdown-body .BlockedImage {
   display: inline-flex;
   align-items: center;

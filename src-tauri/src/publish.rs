@@ -48,7 +48,7 @@ fn gh(git: &Git) -> Command {
 /// Returns (PR into the previewed base, PR into another base). Pull requests
 /// from forks that happen to use the same branch name are ignored.
 fn find_prs(git: &Git, s: &Snapshot) -> Result<(Option<ExistingPr>, Option<(ExistingPr, String)>), String> {
-    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the URL of `origin` (the only remote prv uses)")?;
+    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the URL of `origin` (the only remote gh-prv-local uses)")?;
     let mut log = String::new();
     let mut list = gh(git);
     list.args([
@@ -80,7 +80,7 @@ pub fn find_pr(git: &Git, s: &Snapshot) -> Result<Option<ExistingPr>, String> {
     if same.is_none() {
         if let Some((pr, base)) = other {
             return Err(format!(
-                "pull request #{} from this branch targets `{base}`, not `{}`. Reopen with `prv --base {base}` to update it.",
+                "pull request #{} from this branch targets `{base}`, not `{}`. Reopen with `gh-prv-local --base {base}` to update it.",
                 pr.number, s.base.name
             ));
         }
@@ -90,7 +90,7 @@ pub fn find_pr(git: &Git, s: &Snapshot) -> Result<Option<ExistingPr>, String> {
 
 pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishRequest) -> Result<PublishResult, String> {
     let mut log = String::new();
-    let remote = remote.ok_or("prv pushes to the `origin` remote only, and this repository has no `origin`")?;
+    let remote = remote.ok_or("gh-prv-local pushes to the `origin` remote only, and this repository has no `origin`")?;
     let branch = &s.head.name;
     // Only the checked-out branch is pushed; a detached HEAD or another ref is rejected.
     if git.line(&["symbolic-ref", "--short", "-q", "HEAD"]).as_deref() != Some(branch.as_str()) {
@@ -98,7 +98,7 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
     }
     // Push exactly what was reviewed.
     if git.line(&["rev-parse", "HEAD"]).as_deref() != Some(s.head.sha.as_str()) {
-        return Err("the branch has new commits since this preview was opened; reopen `prv` to review them".into());
+        return Err("the branch has new commits since this preview was opened; reopen `gh-prv-local` to review them".into());
     }
     if s.head.name == s.base.name {
         return Err(format!("the head branch `{branch}` is the base branch; create a feature branch first"));
@@ -114,7 +114,7 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
             );
         }
     }
-    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the URL of `origin` (the only remote prv uses)")?;
+    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the URL of `origin` (the only remote gh-prv-local uses)")?;
     let host = s.repo.host.clone().unwrap_or_else(|| "github.com".into());
 
     // Fail before pushing when gh is missing or not logged in to this host.

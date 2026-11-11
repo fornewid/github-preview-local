@@ -157,7 +157,7 @@ export function ConversationTab() {
                 <div className="MergeBox-sub">
                   {checks.total
                     ? `${checks.passed} successful, ${checks.failed} failing, ${checks.total - checks.passed - checks.failed} not run`
-                    : 'Add a .prv.toml to define checks.'}
+                    : 'Add a .gh-prv-local.toml to define checks.'}
                 </div>
               </div>
               <Button size="small" onClick={() => setTab('checks')}>
@@ -363,7 +363,7 @@ export function ChecksTab() {
       <div className="Blankslate-box">
         <h3>Local checks run in the native window</h3>
         <p>
-          Open this preview with <code>prv</code> to run checks.
+          Open this preview with <code>gh-prv-local</code> to run checks.
         </p>
       </div>
     )
@@ -379,7 +379,7 @@ export function ChecksTab() {
       <div className="Blankslate-box">
         <h3>No checks found</h3>
         <p>
-          Add <code>.prv.toml</code> to the repository root, for example:
+          Add <code>.gh-prv-local.toml</code> to the repository root, for example:
         </p>
         <p className="Blankslate-note">Checks run commands from this repository on your machine — only run them in repositories you trust.</p>
         <pre className="Blankslate-pre">{'[[checks]]\nname = "lint"\nrun = "npm run lint"\n\n[[checks]]\nname = "test"\nrun = "./gradlew test"'}</pre>

@@ -1,4 +1,4 @@
-// Captures the same states as states.mjs / states2.mjs from a prv export, so they can be compared
+// Captures the same states as states.mjs / states2.mjs from a gh-prv-local export, so they can be compared
 // side by side with the github.com captures (compare.py).
 //
 //   node local-states.mjs <preview.html> <outDir> [light|dark]

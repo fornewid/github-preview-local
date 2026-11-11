@@ -21,7 +21,7 @@ const MAX_BLOB_BYTES: usize = 5 * 1024 * 1024;
 pub struct Git {
     pub root: PathBuf,
     /// A partial clone whose missing objects would come from a remote other than `origin`:
-    /// git may not fetch them on demand (prv talks to `origin` only).
+    /// git may not fetch them on demand (gh-prv-local talks to `origin` only).
     no_lazy_fetch: bool,
 }
 
@@ -131,7 +131,7 @@ pub struct DiffEnds {
     pub b: String,
 }
 
-/// The only remote prv talks to (fetching the base, pushing, the pull request on its GitHub host):
+/// The only remote gh-prv-local talks to (fetching the base, pushing, the pull request on its GitHub host):
 /// `origin`. Without one, the base is compared as it is locally and Confirm is unavailable.
 pub fn pick_remote(git: &Git) -> Option<String> {
     let remotes = git.run(&["remote"]).ok()?;
@@ -251,7 +251,7 @@ fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(S
     }
     Err(match remote {
         Some(_) => "could not determine the base branch; pass --base <branch>".into(),
-        None => "could not determine the base branch: there is no `origin` remote (the only remote prv uses) and no local main/master branch; pass --base <branch>".into(),
+        None => "could not determine the base branch: there is no `origin` remote (the only remote gh-prv-local uses) and no local main/master branch; pass --base <branch>".into(),
     })
 }
 
@@ -260,7 +260,7 @@ fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(S
 fn worktree_tree(git: &Git) -> Result<String, String> {
     let index = git.git_path("index");
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    let tmp = git.git_path(&format!("prv-index-{}-{nanos}.tmp", std::process::id()));
+    let tmp = git.git_path(&format!("gh-prv-local-index-{}-{nanos}.tmp", std::process::id()));
     if let Some(dir) = tmp.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -588,7 +588,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     let mut warnings = vec![];
     if git.no_lazy_fetch && !git_at_least(git, 2, 44) {
         warnings.push(
-            "This partial clone gets missing objects from a remote other than `origin`; git before 2.44 cannot be kept from fetching them while prv reads the diff.".into(),
+            "This partial clone gets missing objects from a remote other than `origin`; git before 2.44 cannot be kept from fetching them while gh-prv-local reads the diff.".into(),
         );
     }
     let remote = pick_remote(git);
@@ -687,12 +687,12 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         DiffEnds { a: merge_base.clone(), b: head_sha.clone() }
     };
     if dirty && mode == "committed" && range.from.is_none() {
-        warnings.push("You have uncommitted changes that are not shown. Run `prv --uncommitted` to include them.".into());
+        warnings.push("You have uncommitted changes that are not shown. Run `gh-prv-local --uncommitted` to include them.".into());
     }
 
     let files = diff_files(git, &ends).map_err(|e| {
         if git.no_lazy_fetch {
-            format!("{e}\n\nThis partial clone gets missing objects from a remote other than `origin`, which prv does not contact. Fetch them first (for example `git fetch` from that remote), then reopen prv.")
+            format!("{e}\n\nThis partial clone gets missing objects from a remote other than `origin`, which gh-prv-local does not contact. Fetch them first (for example `git fetch` from that remote), then reopen gh-prv-local.")
         } else {
             e
         }
@@ -771,7 +771,7 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
         return hit;
     }
     let objects = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "objects"])?;
-    let scratch = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "prv"])?;
+    let scratch = git.line(&["rev-parse", "--path-format=absolute", "--git-path", crate::STATE_DIR])?;
     std::fs::create_dir_all(&scratch).ok()?;
     remove_stale_merge_objects(std::path::Path::new(&scratch));
     let nanos = std::time::SystemTime::now()
@@ -837,7 +837,7 @@ fn parse_merge_tree(code: Option<i32>, stdout: &str) -> Option<Vec<String>> {
 }
 
 /// Throwaway object directories that an interrupted run left behind (older than an hour, so a
-/// merge check running right now in another prv is never touched).
+/// merge check running right now in another gh-prv-local is never touched).
 fn remove_stale_merge_objects(scratch: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(scratch) else { return };
     for e in entries.flatten() {
@@ -939,7 +939,7 @@ pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Reads many blobs with one `git cat-file --batch` process (used by `prv export`).
+/// Reads many blobs with one `git cat-file --batch` process (used by `gh-prv-local export`).
 /// Returns sha -> text for text blobs under the size limit.
 pub fn read_blobs(git: &Git, shas: &[String]) -> HashMap<String, String> {
     use std::io::{BufRead, BufReader, Read as _};

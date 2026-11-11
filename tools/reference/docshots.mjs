@@ -1,4 +1,4 @@
-// Renders the README screenshots (docs/images) from a prv export.
+// Renders the README screenshots (docs/images) from a gh-prv-local export.
 //
 //   node docshots.mjs <preview.html> [outDir=../../docs/images]
 import { chromium } from 'playwright-core'

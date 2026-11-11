@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds prv from source and installs it to ~/.local/bin (or $PREFIX/bin).
+# Builds gh-prv-local from source and installs it to ~/.local/bin (or $PREFIX/bin).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PREFIX="${PREFIX:-$HOME/.local}"
@@ -9,6 +9,6 @@ npm --prefix ui ci --no-audit --no-fund
 npm --prefix ui run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
 mkdir -p "$PREFIX/bin"
-install -m 0755 src-tauri/target/release/prv "$PREFIX/bin/prv"
-echo "Installed: $PREFIX/bin/prv"
+install -m 0755 src-tauri/target/release/gh-prv-local "$PREFIX/bin/gh-prv-local"
+echo "Installed: $PREFIX/bin/gh-prv-local"
 case ":$PATH:" in *":$PREFIX/bin:"*) ;; *) echo "Add $PREFIX/bin to your PATH." ;; esac

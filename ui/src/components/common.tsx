@@ -137,9 +137,10 @@ function sanitize(html: string): string {
 }
 
 /**
- * prv loads nothing from other hosts (github.com shows images through its camo proxy; prv would
- * have to ask the image's host directly). An image becomes a link to it instead, which opens in the
- * browser only when clicked; a relative path (a file in the repository) is just named.
+ * gh-prv-local loads nothing from other hosts (github.com shows images through its camo proxy;
+ * gh-prv-local would have to ask the image's host directly). An image becomes a link to it
+ * instead, which opens in the browser only when clicked; a relative path (a file in the
+ * repository) is just named.
  */
 function blockedImage(img: HTMLImageElement): Element {
   // Protocol-relative (//host/x.png) means https here: the page itself is tauri: or file:.
@@ -152,7 +153,7 @@ function blockedImage(img: HTMLImageElement): Element {
   el.className = 'BlockedImage'
   el.textContent = label
   el.title = remote
-    ? `Image not loaded (prv loads nothing from other hosts): ${src}`
+    ? `Image not loaded (gh-prv-local loads nothing from other hosts): ${src}`
     : src
       ? `Image in the repository: ${src}`
       : 'Image not shown'

@@ -34,6 +34,6 @@ createTransport()
   .catch((e) => useStore.setState({ error: String(e), loading: false }))
   .finally(() => {
     const mode = (window as unknown as { __PRV_SELFTEST__?: true | 'flows' }).__PRV_SELFTEST__
-    // `PRV_SELFTEST=1 prv` (or `=flows`): exercise the native IPC path, report, then exit.
+    // `GH_PRV_LOCAL_SELFTEST=1 gh-prv-local` (or `=flows`): exercise the native IPC path, report, then exit.
     if (mode) void runSelftest(mode)
   })

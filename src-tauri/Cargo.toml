@@ -1,14 +1,14 @@
 [package]
-name = "prv"
+name = "gh-prv-local"
 version = "0.1.0"
 edition = "2021"
 description = "Preview your branch as a GitHub pull request, locally — no web server, no round-trips to GitHub."
 license = "MIT"
 repository = "https://github.com/fornewid/github-preview-local"
-default-run = "prv"
+default-run = "gh-prv-local"
 
 [[bin]]
-name = "prv"
+name = "gh-prv-local"
 path = "src/main.rs"
 
 [build-dependencies]

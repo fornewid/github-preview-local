@@ -3,9 +3,9 @@ import react from '@vitejs/plugin-react'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 import tauri from '../src-tauri/tauri.conf.json'
 
-// prv sends nothing anywhere. The page may only use what it carries: no image, font, media or
+// gh-prv-local sends nothing anywhere. The page may only use what it carries: no image, font, media or
 // request from another host. The native window gets this policy as a header from
-// tauri.conf.json; the same policy goes into the page itself for `prv export`, which a browser
+// tauri.conf.json; the same policy goes into the page itself for `gh-prv-local export`, which a browser
 // opens without that header. No DNS prefetching of link hosts, no referrer.
 const noEgress = {
   name: 'prv-no-egress',
@@ -25,7 +25,7 @@ const noEgress = {
 
 // Everything (JS, CSS, fonts, the highlighter worker and its WASM) is inlined
 // into a single index.html. The native window loads it through Tauri's custom
-// protocol and `prv export` writes it to disk, so no web server is involved.
+// protocol and `gh-prv-local export` writes it to disk, so no web server is involved.
 export default defineConfig({
   plugins: [react(), viteSingleFile({ removeViteModuleLoader: true }), noEgress],
   base: './',

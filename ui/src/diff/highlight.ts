@@ -12,12 +12,12 @@ function getWorker() {
   if (!worker) {
     worker = new HlWorker()
     worker.onmessage = (e: MessageEvent<{ id: number; lines: HlLines | null; error?: string }>) => {
-      if (e.data.error) console.warn('[prv] highlight failed:', e.data.error)
+      if (e.data.error) console.warn('[gh-prv-local] highlight failed:', e.data.error)
       pending.get(e.data.id)?.(e.data.lines)
       pending.delete(e.data.id)
     }
     worker.onerror = (e) => {
-      console.warn('[prv] highlighter unavailable:', e.message)
+      console.warn('[gh-prv-local] highlighter unavailable:', e.message)
       for (const r of pending.values()) r(null)
       pending.clear()
     }

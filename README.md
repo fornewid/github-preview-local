@@ -1,4 +1,4 @@
-# prv — local pull request preview
+# gh-prv-local — local pull request preview
 
 Preview your branch **exactly the way github.com's pull request "Files changed" page shows it**,
 before you push. Review it with line comments, hand the review to an AI agent (Claude Code), run
@@ -15,20 +15,20 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   toolbar controls move into an overflow menu, …). The native window zooms with Cmd/Ctrl + `=` /
   `-` / `0` like a browser.
 - **Kept in sync with github.com**: measuring tools capture the signed-in page and compare it with
-  prv pixel by pixel ([docs/design-sync.md](docs/design-sync.md)).
+  gh-prv-local pixel by pixel ([docs/design-sync.md](docs/design-sync.md)).
 - **Same comparison as a pull request**: three-dot diff from the merge base of `origin/<base>`
   (fetched first), rename detection, `.gitattributes` `linguist-generated`, lock files
   collapsed, binary / submodule / mode changes, CRLF, *No newline at end of file*.
 - **No web server**: a native window (system WebView via Tauri) talks to the CLI over IPC.
   Nothing listens on a port.
-- **Talks to `origin` only**: prv fetches the base branch from `origin` (skip with `--no-fetch`),
+- **Talks to `origin` only**: gh-prv-local fetches the base branch from `origin` (skip with `--no-fetch`),
   looks up an open pull request on origin's GitHub host when the merge panel opens, and pushes and
   opens the pull request when you press *Confirm*. Nothing else leaves the machine: no other
   remote, no submodule hosts, no GitHub CLI telemetry or update checks, and images in pull request
   descriptions or commit messages are not loaded (they show as links, unlike github.com, which
   serves them through its image proxy). Local checks run your own commands, which may use the
   network like they would in a terminal.
-- **Made for AI-assisted coding**: `prv` blocks until you submit a review and prints it to stdout
+- **Made for AI-assisted coding**: `gh-prv-local` blocks until you submit a review and prints it to stdout
   (Markdown or JSON) with file, line, code snippet and comment — Claude Code acts on it directly.
 
 | Split | Unified |
@@ -44,7 +44,7 @@ local checks, and when you are happy press **Confirm** to push the branch and op
 ## Why
 
 On a busy GitHub (Enterprise) instance, pull request checks can take hours and every
-"push → look at the diff on GitHub → fix → push again" round adds load and waiting. `prv` lets you
+"push → look at the diff on GitHub → fix → push again" round adds load and waiting. `gh-prv-local` lets you
 do those rounds locally, in the same UI, and only push once the change is right.
 
 ## Install
@@ -56,7 +56,7 @@ GitHub Enterprise Server hosts too).
 ```bash
 git clone https://github.com/fornewid/github-preview-local.git
 cd github-preview-local
-./scripts/install.sh            # builds and installs ~/.local/bin/prv
+./scripts/install.sh  # builds and installs ~/.local/bin/gh-prv-local
 ```
 
 Linux needs the WebKitGTK runtime (`libwebkit2gtk-4.1`); Windows uses WebView2 (preinstalled on
@@ -66,31 +66,31 @@ Windows 10/11).
 
 ```text
 /plugin marketplace add fornewid/github-preview-local
-/plugin install prv@github-preview-local
+/plugin install gh-prv-local@github-preview-local
 ```
 
-Then run `/prv` (or just ask Claude to "preview the PR"). The window opens; when you submit,
+Then run `/gh-prv-local` (or just ask Claude to "preview the PR"). The window opens; when you submit,
 Claude receives your review and addresses each comment. *Confirm* pushes and opens the PR.
 
 ## Usage
 
 ```bash
-prv                         # HEAD vs the remote default branch (fetches the base first)
-prv --base develop          # another base branch (origin/develop if it exists)
-prv --uncommitted           # include uncommitted + untracked changes (staging area untouched)
-prv --no-fetch              # do not fetch the base branch
-prv --format json           # JSON review on stdout
-prv -C path/to/repo         # run in another repository
+gh-prv-local                         # HEAD vs the remote default branch (fetches the base first)
+gh-prv-local --base develop          # another base branch (origin/develop if it exists)
+gh-prv-local --uncommitted           # include uncommitted + untracked changes (staging area untouched)
+gh-prv-local --no-fetch              # do not fetch the base branch
+gh-prv-local --format json           # JSON review on stdout
+gh-prv-local -C path/to/repo         # run in another repository
 
-prv export [--open] [-o f]  # self-contained HTML (UI + data), opens from disk — for SSH/remote
-prv checks [--json] [name]  # run local checks headless (exit 1 on failure)
-prv list-checks             # show configured / auto-detected checks
+gh-prv-local export [--open] [-o f]  # self-contained HTML (UI + data), opens from disk — for SSH/remote
+gh-prv-local checks [--json] [name]  # run local checks headless (exit 1 on failure)
+gh-prv-local list-checks             # show configured / auto-detected checks
 ```
 
 Settings from the gear menu (*Unified / Split*, *Whitespace changes*, *Minimize comments* — `i`,
 *Compact line height*) are remembered, like on GitHub. `t` focuses the file filter. The side
 panel can be resized by dragging its edge. Cmd/Ctrl + `=` / `-` / `0` zoom the native window (the
-level is remembered); in a browser (`prv export`) use the browser's zoom.
+level is remembered); in a browser (`gh-prv-local export`) use the browser's zoom.
 
 ### Reviewing
 
@@ -100,12 +100,12 @@ level is remembered); in a browser (`prv export`) use the browser's zoom.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the window closes and the review is printed to stdout.
   - *Confirm*: edit the PR title / description (prefilled from the commit or
-    `.github/pull_request_template.md`), optionally *draft*, then `prv` pushes the reviewed commit
+    `.github/pull_request_template.md`), optionally *draft*, then `gh-prv-local` pushes the reviewed commit
     and runs `gh pr create` (or reuses the open PR). Also available from **Merge status**, which
     shows the local checks and whether the branch conflicts with the base branch.
 - *All commits* → *Changes since your last review* shows only the commits added since you last
   submitted a review.
-- Pending comments, *Viewed* state and the last review are saved in `.git/prv/` (never committed).
+- Pending comments, *Viewed* state and the last review are saved in `.git/gh-prv-local/` (never committed).
 
 Example output:
 
@@ -114,7 +114,7 @@ Example output:
 
 `fix/126-intrinsic-measurements` (872122b) → `main` (merge-base 61dfeb4) · 2 files · 1 comment
 
-The reviewer requested changes. Address every comment below, then run `prv` again to request another review.
+The reviewer requested changes. Address every comment below, then run `gh-prv-local` again to request another review.
 
 ## Comments
 
@@ -128,7 +128,7 @@ Use `mutableIntStateOf` only if the value is always an Int.
 
 ### Local checks
 
-Define checks in `.prv.toml` at the repository root:
+Define checks in `.gh-prv-local.toml` at the repository root:
 
 ```toml
 [[checks]]
@@ -138,33 +138,33 @@ run = "./gradlew ktlintCheck"
 [[checks]]
 name = "test"
 run = "npm test"
-timeout = 600   # seconds
+timeout = 600  # seconds
 ```
 
-Without a config, prv detects `package.json` scripts (lint, typecheck, check, test),
+Without a config, gh-prv-local detects `package.json` scripts (lint, typecheck, check, test),
 `./gradlew check`, Cargo, Go, Makefile `lint`/`test` targets and pre-commit. Commands run in the
-repository root with `PRV_BASE`, `PRV_BASE_SHA`, `PRV_HEAD`, `PRV_MERGE_BASE` and
-`PRV_CHANGED_FILES` (newline-separated) in the environment. Results appear in the **Checks** tab
-and in the *Merge status* panel.
+repository root with `GH_PRV_LOCAL_BASE`, `GH_PRV_LOCAL_BASE_SHA`, `GH_PRV_LOCAL_HEAD`,
+`GH_PRV_LOCAL_MERGE_BASE` and `GH_PRV_LOCAL_CHANGED_FILES` (newline-separated) in the environment.
+Results appear in the **Checks** tab and in the *Merge status* panel.
 
 ## How it works
 
 ```
-prv (Rust CLI)                          native window (system WebView)
+gh-prv-local (Rust CLI)                                             native window (system WebView)
  ├─ git: merge-base, diff --raw/--numstat/-U3 (and -w), cat-file   ◄── Tauri IPC ──►  React UI
  ├─ merge-tree conflicts, CODEOWNERS of the base branch                      ├─ Primer React (github.com's release) + primitives
- ├─ checks runner (.prv.toml / auto-detect)                                  ├─ starry-night (GitHub grammars, pl-* classes)
+ ├─ checks runner (.gh-prv-local.toml / auto-detect)                         ├─ starry-night (GitHub grammars, pl-* classes)
  ├─ publish: git push + gh pr create                                         └─ GitHub's new Files changed layout (prv.css)
  └─ prints the review to stdout on exit
 ```
 
 The UI is a single HTML file (highlighter worker and WASM inlined) embedded in the binary;
-`prv export` writes the same file with the data embedded.
+`gh-prv-local export` writes the same file with the data embedded.
 
-- `ui/` — React + TypeScript UI (`npm run dev` serves `public/dev-data.json` from `prv export --data`)
+- `ui/` — React + TypeScript UI (`npm run dev` serves `public/dev-data.json` from `gh-prv-local export --data`)
 - `src-tauri/` — Rust CLI / native window (`cargo build --release`)
-- `plugin/` — Claude Code plugin (`/prv` command and skill)
-- `tools/reference/` — measure the signed-in github.com page with your local Chrome, compare prv
+- `plugin/` — Claude Code plugin (`/gh-prv-local` command and skill)
+- `tools/reference/` — measure the signed-in github.com page with your local Chrome, compare gh-prv-local
   with it and run UI tests; see [docs/design-sync.md](docs/design-sync.md)
 
 ## Development
@@ -172,16 +172,17 @@ The UI is a single HTML file (highlighter worker and WASM inlined) embedded in t
 ```bash
 npm --prefix ui install && npm --prefix ui run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
-PRV_SELFTEST=1 src-tauri/target/release/prv --no-fetch   # opens the window, reports what rendered (and that code
-                                                         # draws in Chrome's font, not WebKit's SF Mono), exits
+# Opens the window, reports what rendered (and that code draws in Chrome's font, not WebKit's
+# SF Mono), exits.
+GH_PRV_LOCAL_SELFTEST=1 src-tauri/target/release/gh-prv-local --no-fetch
 
 # The native-only features, clicked through in the real window: a commit range, local checks
 # (pass, fail, cancel) and Confirm (push + pull request, then pushing to that open pull request).
-scripts/native-selftest.sh                               # offline: local remote, stand-in `gh`
-scripts/native-selftest.sh --github you/scratch-repo     # real push and pull request (your login)
+scripts/native-selftest.sh                            # offline: local remote, stand-in `gh`
+scripts/native-selftest.sh --github you/scratch-repo  # real push and pull request (your login)
 
 cd tools/reference && npm install
-node ui-test.mjs path/to/export.html                     # end-to-end checks of the review UI
+node ui-test.mjs path/to/export.html                  # end-to-end checks of the review UI
 ```
 
 The page is compared with the signed-in github.com page using the tools in `tools/reference`;

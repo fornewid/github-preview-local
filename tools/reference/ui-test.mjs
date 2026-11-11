@@ -1,4 +1,4 @@
-// End-to-end checks of the review UI on a prv export (static transport), with the local Chrome:
+// End-to-end checks of the review UI on a gh-prv-local export (static transport), with the local Chrome:
 // comments (line, file, edit), settings (layout, whitespace, line height, minimize), expanders,
 // viewed, panels, commit picker, file tree filter, review submission, and the layout from 320px
 // to 2560px (file tree and side panel dialogs, side panel width, overflow menu, compact headers).
@@ -11,7 +11,7 @@ const file = process.argv[2]
 const browser = await chromium.launch({ channel: 'chrome', headless: true })
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
 const page = await ctx.newPage()
-// prv loads nothing from any host: every request must stay inside the file.
+// gh-prv-local loads nothing from any host: every request must stay inside the file.
 const external = []
 ctx.on('request', (r) => /^(file|data|blob):/.test(r.url()) || external.push(r.url()))
 const errors = []

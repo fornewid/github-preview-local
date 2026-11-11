@@ -396,7 +396,7 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
             </ActionList.Group>
           </ActionList>
           <div className="CommitPicker-rangeHeading">Select a range of commits</div>
-          {!canRange && <div className="CommitPicker-note">Commit ranges are available in the native window (`prv`).</div>}
+          {!canRange && <div className="CommitPicker-note">Commit ranges are available in the native window (`gh-prv-local`).</div>}
           <ul className="CommitPicker-list">
             {commits.map((c, i) => {
               const checked = mode === 'range' && !!sel && i >= sel[0] && i <= sel[1]
@@ -532,7 +532,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
             <FormControl.Label>Confirm</FormControl.Label>
             <FormControl.Caption>
               {!canPublish
-                ? 'Available in the native window (`prv`).'
+                ? 'Available in the native window (`gh-prv-local`).'
                 : range.from
                   ? 'Switch back to all commits to confirm.'
                   : pr

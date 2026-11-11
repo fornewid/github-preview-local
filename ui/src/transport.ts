@@ -118,7 +118,7 @@ function createStatic(data: StaticData): Transport {
     findPr: async () => null,
     onCheckEvent: () => () => {},
     publish: async () => {
-      throw new Error('Publishing is not available in a static export. Run `prv` to open the native window.')
+      throw new Error('Publishing is not available in a static export. Run `gh-prv-local` to open the native window.')
     },
     submit: async () => {},
     openInEditor: async () => {},
@@ -129,9 +129,9 @@ function createStatic(data: StaticData): Transport {
 export async function createTransport(): Promise<Transport> {
   if (window.__TAURI_INTERNALS__) return createNative()
   if (window.__PRV_DATA__) return createStatic(window.__PRV_DATA__)
-  // Development: `vite` serves `public/dev-data.json` produced by `prv export --data`.
+  // Development: `vite` serves `public/dev-data.json` produced by `gh-prv-local export --data`.
   const url = new URLSearchParams(location.search).get('data') ?? '/dev-data.json'
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`No data source. Run \`prv\` or \`prv export\`. (${url}: ${res.status})`)
+  if (!res.ok) throw new Error(`No data source. Run \`gh-prv-local\` or \`gh-prv-local export\`. (${url}: ${res.status})`)
   return createStatic((await res.json()) as StaticData)
 }

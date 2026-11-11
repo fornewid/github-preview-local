@@ -1,8 +1,9 @@
 # Following github.com design changes
 
-prv copies the look of github.com's pull request page. When GitHub ships a change, re-measure
-the page, compare it with prv side by side and update prv. Everything below runs locally with
-the installed Google Chrome; the tools live in `tools/reference` (`npm install` there once).
+gh-prv-local copies the look of github.com's pull request page. When GitHub ships a change,
+re-measure the page, compare it with gh-prv-local side by side and update it. Everything below runs
+locally with the installed Google Chrome; the tools live in `tools/reference` (`npm install` there
+once).
 
 ## 1. Sign in once
 
@@ -41,10 +42,10 @@ and diffs github.com's theme tokens with the installed `@primer/primitives`. If 
 update `ui/package.json` (`npm install --save-exact @primer/react@<version>`); if tokens differ,
 update `@primer/primitives`.
 
-## 4. Compare with prv
+## 4. Compare with gh-prv-local
 
 ```bash
-prv -C <repo of the same PR> --no-fetch export -o ../../.ref/prv.html
+gh-prv-local -C <repo of the same PR> --no-fetch export -o ../../.ref/prv.html
 node local-states.mjs ../../.ref/prv.html ../../.ref/prv-states
 python3 compare.py ../../.ref/gh-states ../../.ref/prv-states ../../.ref/out --align-gh 261.5 --align-prv 226
 ```
@@ -75,11 +76,11 @@ side: github.com has a taller global header) and writes side-by-side (`sbs-*.png
 (`diff-*.png`) images with the share of differing pixels. Text that is different by nature (title,
 author, avatars) always shows up; look for shifted boxes, colors and missing controls.
 
-## 5. Update prv
+## 5. Update gh-prv-local
 
 - Primer components (`ui/src/components/**`) pick up most changes through the version bump.
 - GitHub's own parts are in `ui/src/styles/prv.css`; the values come from `dump.mjs`.
 - Record new values in [reference.md](reference.md).
 - Run `node tools/reference/ui-test.mjs <export.html>` (end-to-end checks of comments, settings,
-  expanders, viewed, panels and review submission) and `PRV_SELFTEST=1 prv --no-fetch` (native
+  expanders, viewed, panels and review submission) and `GH_PRV_LOCAL_SELFTEST=1 gh-prv-local --no-fetch` (native
   window) before committing.

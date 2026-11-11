@@ -1,4 +1,4 @@
-//! Local checks: commands from `.prv.toml`, or auto-detected from common
+//! Local checks: commands from `.gh-prv-local.toml`, or auto-detected from common
 //! project files (package.json, Gradle, Cargo, Go, Makefile, pre-commit).
 
 use crate::model::CheckDef;
@@ -22,7 +22,7 @@ struct CheckConf {
 }
 
 pub fn discover(root: &Path) -> Result<Vec<CheckDef>, String> {
-    for name in [".prv.toml", "prv.toml", ".github/prv.toml"] {
+    for name in [".gh-prv-local.toml", "gh-prv-local.toml", ".github/gh-prv-local.toml"] {
         let p = root.join(name);
         if let Ok(text) = std::fs::read_to_string(&p) {
             let cfg: Config = toml::from_str(&text).map_err(|e| format!("{name}: {e}"))?;
@@ -87,7 +87,7 @@ fn auto_detect(root: &Path) -> Vec<CheckDef> {
     if root.join(".pre-commit-config.yaml").exists() {
         push(
             "pre-commit",
-            "pre-commit run --from-ref \"$PRV_MERGE_BASE\" --to-ref \"$PRV_HEAD\"".into(),
+            "pre-commit run --from-ref \"$GH_PRV_LOCAL_MERGE_BASE\" --to-ref \"$GH_PRV_LOCAL_HEAD\"".into(),
             ".pre-commit-config.yaml",
         );
     }
@@ -136,4 +136,35 @@ pub fn run(
     };
     let timeout = Duration::from_secs(def.timeout.unwrap_or(DEFAULT_TIMEOUT));
     crate::proc::stream(child, timeout, cancel, tail, on_output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir(files: &[(&str, &str)]) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("gh-prv-local-checks-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".github")).unwrap();
+        for (name, text) in files {
+            std::fs::write(d.join(name), text).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn config_file_names() {
+        let one = |name: &str| "[[checks]]\nname = \"NAME\"\nrun = \"true\"\n".replace("NAME", name);
+        let d = dir(&[(".github/gh-prv-local.toml", &one("github"))]);
+        let found = discover(&d).unwrap();
+        assert_eq!((found[0].name.as_str(), found[0].source.as_str()), ("github", ".github/gh-prv-local.toml"));
+        // The repository root wins over .github/.
+        let d2 = dir(&[(".github/gh-prv-local.toml", &one("github")), (".gh-prv-local.toml", &one("root"))]);
+        assert_eq!(discover(&d2).unwrap()[0].name, "root");
+        for d in [d, d2] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
 }

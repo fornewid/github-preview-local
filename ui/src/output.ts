@@ -35,7 +35,7 @@ const HEADLINE: Record<ReviewResult['event'], string> = {
   CONFIRM: 'Confirmed',
 }
 
-/** Human- and agent-readable review summary printed by `prv` on exit. */
+/** Human- and agent-readable review summary printed by `gh-prv-local` on exit. */
 export function formatReview(r: ReviewResult, s: Snapshot): string {
   const out: string[] = []
   const n = r.comments.length
@@ -55,7 +55,7 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
       )
     } else out.push('The reviewer confirmed the changes.')
   } else if (r.event === 'REQUEST_CHANGES') {
-    out.push('The reviewer requested changes. Address every comment below, then run `prv` again to request another review.')
+    out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again to request another review.')
   } else {
     out.push('The reviewer left comments. Consider each one; reply in your summary if you decide not to change something.')
   }

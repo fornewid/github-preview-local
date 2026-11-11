@@ -1,6 +1,6 @@
 # Reference measurements (github.com, November 2026)
 
-prv reproduces the **new "Files changed" experience** that github.com shows signed-in users
+gh-prv-local reproduces the **new "Files changed" experience** that github.com shows signed-in users
 (on by default since 2026-01-22, URL `/pull/N/changes`). Signed-out visitors still get the classic
 page, so the reference is captured with a signed-in Chrome profile (see
 [design-sync.md](design-sync.md)): Chrome 1440×900, DPR 2, on
@@ -8,7 +8,7 @@ page, so the reference is captured with a signed-in Chrome profile (see
 
 ## Building blocks
 
-| Part | github.com | prv |
+| Part | github.com | gh-prv-local |
 |---|---|---|
 | Components (buttons, menus, dialogs, tree, page layout, header) | `@primer/react` CSS modules (`prc-*`), release matched by class hash: 38.42–38.45 | `@primer/react` **38.45.0** |
 | Color tokens | Primer primitives light/dark themes | `@primer/primitives` **11.10.0** (0 differing tokens) |
@@ -65,11 +65,11 @@ page, so the reference is captured with a signed-in Chrome profile (see
 ## Widths and zoom
 
 Measured with `tools/reference/breakpoints.mjs` (it finds each threshold to the pixel on
-github.com and on a prv export and prints them side by side; they are identical from 2560px to
+github.com and on a gh-prv-local export and prints them side by side; they are identical from 2560px to
 320px, and with `--panel` from 1600px to 1012px with the side panel open). Widths are CSS pixels: browser zoom divides the window width (a 1440px window at 150% is
 960px), and so does the native window's zoom (Cmd/Ctrl + `=` / `-` / `0`, Chrome's levels 25–500%).
 
-| Window | github.com (and prv) |
+| Window | github.com (and gh-prv-local) |
 |---|---|
 | ≥ 1076px | File tree beside the diffs (page container ≥ 1012px plus 2 × 32px padding; with the side panel docked the container has no right padding, so ≥ 1044px) |
 | < 1076px | Tree hidden; the toggle opens a *Files* `Dialog` from the left (640px; fullscreen under 768px), closed by choosing a file. Header actions (*Merge status*) move above the title (`@container (width <= 1011px)`; with the side panel open the header itself is the container) |
@@ -81,15 +81,15 @@ github.com and on a prv export and prints them side by side; they are identical 
 | ≤ 544px | Commits: no timeline line, the list uses the full width |
 | < 544px | Tab icons hidden; state label above the summary line; commits: SHA and its buttons fold into a kebab (*Copy full SHA for …*) |
 | toolbar ≤ 500px (window ≤ 532px) | Viewed progress hidden |
-| ≤ 335px | github.com's own header overflows horizontally; prv does not |
+| ≤ 335px | github.com's own header overflows horizontally; gh-prv-local does not |
 | any | Branch names at most 35vw, truncated; title inline so the number and edit button follow its last line; long hunk headers wrap |
 
 The JS side of these thresholds (dialogs, menus) is in `ui/src/layout.ts`; WebKit applies zoom to
-media queries without a `change` event, so prv also re-checks on `resize` and after zooming.
+media queries without a `change` event, so gh-prv-local also re-checks on `resize` and after zooming.
 
 ## Not reproduced on purpose
 
-- github.com's global header and repository navigation (Code, Issues, …): prv shows a small
+- github.com's global header and repository navigation (Code, Issues, …): gh-prv-local shows a small
   repository bar instead; the GitHub logo is not used.
 - *Code*, *Preview* (feature preview), Copilot and *Paste, drop, or click to add files*: they act
   on github.com and have no local meaning.

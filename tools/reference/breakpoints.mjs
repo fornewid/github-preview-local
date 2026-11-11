@@ -1,13 +1,13 @@
 // Finds the window widths at which the "Files changed" page changes layout (file tree beside the
 // diffs or in a dialog, header actions above the title, shortened labels, overflow menu, compact
-// file headers, …) on github.com and on a prv export, and prints them side by side.
+// file headers, …) on github.com and on a gh-prv-local export, and prints them side by side.
 //
 //   node breakpoints.mjs <pull request URL> <preview.html> [--from 1600] [--to 320] [--panel]
 //
 // --panel sweeps with the Overview side panel open (it docks from 1012px and changes, for
 // example, the width at which the file tree leaves the side).
 //
-// Features are detected by accessible names and visible text, which prv keeps identical to
+// Features are detected by accessible names and visible text, which gh-prv-local keeps identical to
 // github.com, so one detector serves both pages. Widths are CSS pixels; browser zoom (and the
 // native window's zoom) moves along the same thresholds.
 //
@@ -233,7 +233,7 @@ for (const c of gh.changes) rows.set(key(c), { change: key(c), github: c.width }
 for (const c of local.changes) rows.set(key(c), { ...(rows.get(key(c)) ?? { change: key(c) }), prv: c.width })
 const sorted = [...rows.values()].sort((a, b) => (b.github ?? b.prv) - (a.github ?? a.prv))
 let mismatches = 0
-// github.com's own header (Status, Code, Preview buttons) overflows very narrow windows; prv not overflowing is fine.
+// github.com's own header (Status, Code, Preview buttons) overflows very narrow windows; gh-prv-local not overflowing is fine.
 const tolerated = (r) => r.change.startsWith('horizontal overflow') && r.prv === undefined
 console.log(`Changes between ${from}px and ${to}px${withPanel ? ', side panel open' : ''} (the width is the narrowest window that still has the "from" state)\n`)
 for (const r of sorted) {
@@ -243,5 +243,5 @@ for (const r of sorted) {
 }
 const firstDiff = Object.keys(gh.first).filter((k) => k !== 'page padding' && JSON.stringify(gh.first[k]) !== JSON.stringify(local.first[k]))
 if (firstDiff.length) console.log(`\nDifferent at ${from}px: ${firstDiff.join(', ')}`)
-console.log(`\n${mismatches ? `${mismatches} differences` : 'identical'} (columns: github.com, prv)`)
+console.log(`\n${mismatches ? `${mismatches} differences` : 'identical'} (columns: github.com, gh-prv-local)`)
 process.exit(mismatches || firstDiff.length ? 1 : 0)
