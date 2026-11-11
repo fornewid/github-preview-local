@@ -51,6 +51,7 @@ async function basic(): Promise<Report & { ok: boolean }> {
   s.applySettings({ zoom: saved }, false)
   await sleep(600)
   const highlighted = document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length
+  const fonts = fontCheck()
   return {
     ok:
       !s.error &&
@@ -58,8 +59,10 @@ async function basic(): Promise<Report & { ok: boolean }> {
       highlighted > 0 &&
       Math.abs(zoom.zoomed - base / 1.5) < 2 &&
       (base / 1.5 >= 1076 || !zoom.treePane) &&
-      Math.abs(window.innerWidth - base / saved) < 2,
+      Math.abs(window.innerWidth - base / saved) < 2 &&
+      fonts.ok,
     zoom,
+    fonts,
     error: s.error,
     files: s.snapshot?.files.length ?? 0,
     rows: document.querySelectorAll('.DiffTable tr').length,
@@ -67,6 +70,34 @@ async function basic(): Promise<Report & { ok: boolean }> {
     checks: s.checks.map((c) => c.name),
     title: document.title,
   }
+}
+
+/**
+ * The window draws text like github.com in Chrome: code in the font Chrome picks (it skips WebKit's
+ * ui-monospace, which is SF Mono), default font smoothing and no kerning (text-rendering).
+ */
+function fontCheck() {
+  const width = (family: string) => {
+    const e = document.createElement('span')
+    e.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font-size:12px'
+    e.style.fontFamily = family
+    e.textContent = 'Wwiil0123 abcdefghij mmmm'
+    document.body.append(e)
+    const w = e.getBoundingClientRect().width
+    e.remove()
+    return Math.round(w * 100) / 100
+  }
+  const code = $('.diff-text-inner')
+  const body = getComputedStyle(document.body)
+  const r = {
+    native: document.documentElement.classList.contains('prv-native'),
+    code: code ? width(getComputedStyle(code).fontFamily) : 0,
+    chrome: width("'Monaspace Neon', SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace"),
+    sfMono: width('ui-monospace'),
+    smoothing: body.getPropertyValue('-webkit-font-smoothing'),
+    rendering: body.textRendering,
+  }
+  return { ...r, ok: r.native && r.code > 0 && r.code === r.chrome && r.smoothing === 'auto' && r.rendering.toLowerCase() === 'optimizespeed' }
 }
 
 /** All commits → one commit → All commits, through the commit picker dialog. */

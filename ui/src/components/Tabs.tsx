@@ -17,7 +17,7 @@ import { ActionList, ActionMenu, Button, IconButton, Label } from '@primer/react
 import { canConfirm, useStore } from '../store'
 import { Avatar, CopyButton, Markdown, copyText } from './common'
 import { MarkdownEditor } from './MarkdownEditor'
-import { ChecksStatusIcon, useChecksSummary } from './PageHeader'
+import { ChecksStatusBadge, ConflictsBadge, useChecksSummary } from './PageHeader'
 import { commitLine } from './changes/Toolbar'
 import { longDate, plural } from '../diff/util'
 import type { CheckState, CheckStatus, Commit } from '../types'
@@ -122,15 +122,7 @@ export function ConversationTab() {
           </div>
         </div>
         {s.commits.map((c) => (
-          <div key={c.sha} className="TimelineItem TimelineItem--condensed">
-            <div className="TimelineItem-badge">
-              <GitCommitIcon size={16} />
-            </div>
-            <div className="TimelineItem-body TimelineItem-commit">
-              <span className="TimelineItem-commitTitle">{c.subject}</span>
-              <code className="TimelineItem-sha">{c.short}</code>
-            </div>
-          </div>
+          <TimelineCommit key={c.sha} c={c} />
         ))}
         {drafts.length > 0 && (
           <div className="TimelineItem">
@@ -151,7 +143,7 @@ export function ConversationTab() {
           </div>
           <div className="MergeBox-box">
             <div className="MergeBox-row">
-              <ChecksStatusIcon status={checks.status} />
+              <ChecksStatusBadge status={checks.status} />
               <div className="MergeBox-text">
                 <h3>
                   {checks.status === 'none'
@@ -173,7 +165,7 @@ export function ConversationTab() {
               </Button>
             </div>
             <div className="MergeBox-row">
-              <ChecksStatusIcon status={s.conflicts == null ? 'idle' : s.conflicts.length ? 'failure' : 'success'} />
+              <ConflictsBadge conflicts={s.conflicts} />
               <div className="MergeBox-text">
                 <h3>
                   {s.conflicts == null
@@ -226,7 +218,7 @@ export function ConversationTab() {
         </div>
         <div className="SidebarItem">
           <h3>Reviewers</h3>
-          <div className="fgColor-muted">{drafts.length ? plural(drafts.length, 'pending comment') : 'No reviews'}</div>
+          <div>{drafts.length ? plural(drafts.length, 'pending comment') : 'No reviews'}</div>
         </div>
       </aside>
     </div>
@@ -239,10 +231,37 @@ function CommitAvatars({ c }: { c: Commit }) {
     <span className="CommitAvatars" aria-hidden>
       {names.map((n, i) => (
         <span key={i} className="CommitAvatars-item" style={{ zIndex: 3 - i }}>
-          <Avatar name={n} size={16} />
+          <Avatar name={n} size={20} />
         </span>
       ))}
     </span>
+  )
+}
+
+/** A commit in the conversation timeline: github.com shows the message as muted code. */
+function TimelineCommit({ c }: { c: Commit }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="TimelineItem TimelineItem--condensed">
+      <div className="TimelineItem-badge">
+        <GitCommitIcon size={16} />
+      </div>
+      <div className="TimelineItem-body TimelineItem-commit">
+        <div className="TimelineItem-commitLine">
+          <CommitAvatars c={c} />
+          <span className="TimelineItem-commitMessage">
+            <code className="TimelineItem-commitTitle">{c.subject}</code>
+            {c.body && (
+              <button type="button" className="TimelineItem-expander" aria-expanded={open} aria-label="Show description" onClick={() => setOpen(!open)}>
+                …
+              </button>
+            )}
+          </span>
+          <code className="TimelineItem-sha">{c.short}</code>
+        </div>
+        {open && <pre className="TimelineItem-commitBody">{c.body}</pre>}
+      </div>
+    </div>
   )
 }
 
@@ -254,9 +273,15 @@ function CommitRow({ c }: { c: Commit }) {
         <div className="CommitRow-titleLine">
           <span className="CommitRow-title">{c.subject}</span>
           {c.body && (
-            <button type="button" className="CommitRow-ellipsis" aria-expanded={open} aria-label="Show description" onClick={() => setOpen(!open)}>
-              <EllipsisIcon size={16} />
-            </button>
+            <IconButton
+              size="small"
+              variant="invisible"
+              className="CommitRow-ellipsis"
+              icon={EllipsisIcon}
+              aria-expanded={open}
+              aria-label="Show description"
+              onClick={() => setOpen(!open)}
+            />
           )}
         </div>
         <div className="CommitRow-meta">
@@ -366,7 +391,7 @@ export function ChecksTab() {
     <div className="Checks">
       <div className="Checks-header">
         <span className="Checks-headerIcon">
-          <ChecksStatusIcon status={summary.status} size={24} />
+          <ChecksStatusBadge status={summary.status} />
         </span>
         <span className="Checks-headerTitle">{last?.subject ?? s.head.name}</span>
         <code className="Checks-headerSha">{s.head.sha.slice(0, 7)}</code>

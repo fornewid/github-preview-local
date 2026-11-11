@@ -165,7 +165,8 @@ The UI is a single HTML file (highlighter worker and WASM inlined) embedded in t
 ```bash
 npm --prefix ui install && npm --prefix ui run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
-PRV_SELFTEST=1 src-tauri/target/release/prv --no-fetch   # opens the window, reports what rendered, exits
+PRV_SELFTEST=1 src-tauri/target/release/prv --no-fetch   # opens the window, reports what rendered (and that code
+                                                         # draws in Chrome's font, not WebKit's SF Mono), exits
 
 # The native-only features, clicked through in the real window: a commit range, local checks
 # (pass, fail, cancel) and Confirm (push + pull request, then pushing to that open pull request).

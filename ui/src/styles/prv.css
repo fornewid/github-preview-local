@@ -14,16 +14,30 @@ html {
 [data-color-mode='dark'] {
   color-scheme: dark;
 }
+/*
+ * Text renders like github.com in Chrome (tools/reference/typography.mjs compares the fonts Chrome
+ * really draws with). github.com loads neither Mona Sans nor Monaspace on the signed-in page, so the
+ * installed fonts decide: on a Mac the system font and, for code, Menlo.
+ */
+:root {
+  /* github.com's monospace stack, newer than the one in @primer/primitives 11.10. */
+  --fontStack-monospace: 'Monaspace Neon', ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+}
+/* The native window is WebKit, the only engine that knows ui-monospace (SF Mono); Chrome, Edge and
+   Firefox skip it, so github.com's code is Menlo there. */
+html.prv-native {
+  --fontStack-monospace: 'Monaspace Neon', SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+}
 body {
   margin: 0;
-  /* github.com's stack; Mona Sans is not loaded on the signed-in page, so the system font renders. */
-  font-family: 'Mona Sans VF', -apple-system, system-ui, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif, 'Apple Color Emoji',
-    'Segoe UI Emoji';
+  font-family: var(--fontStack-sansSerif);
   font-size: 14px;
   line-height: 1.5;
   color: var(--fgColor-default);
   background-color: var(--bgColor-default);
-  -webkit-font-smoothing: antialiased;
+  /* github.com's body.text-rendering-optimize-speed: no kerning or ligatures. Font smoothing stays
+     at the default (antialiased would draw thinner text on macOS than github.com). */
+  text-rendering: optimizeSpeed;
 }
 button,
 input,
@@ -320,7 +334,7 @@ h3 {
 }
 .TabNav-icon {
   margin-right: 8px;
-  color: var(--fgColor-muted);
+  color: var(--fgColor-default);
 }
 .TabNav-counter {
   margin-left: 8px;
@@ -757,7 +771,8 @@ h3 {
   min-height: 24px;
   margin-left: calc(var(--diff-line-height) * -1);
   padding: 0;
-  color: var(--diffBlob-hunkNum-fgColor-rest, var(--fgColor-muted));
+  /* github.com: muted, not --diffBlob-hunkNum-fgColor-rest (the default text color). */
+  color: var(--fgColor-muted);
   background-color: var(--diffBlob-hunkNum-bgColor-rest, var(--diffBlob-hunk-bgColor-num));
   border: 0;
   border-radius: 0;
@@ -1379,8 +1394,9 @@ h3 {
   margin-left: 15px;
   background-color: var(--borderColor-muted);
 }
+/* github.com: 52px per commit row (4px + 5px above a 21px line, 6px + 16px below). */
 .TimelineItem--condensed {
-  padding: 4px 0;
+  padding: 4px 0 16px;
 }
 .TimelineItem-badge {
   position: relative;
@@ -1399,7 +1415,7 @@ h3 {
 }
 .TimelineItem--condensed .TimelineItem-badge {
   height: 16px;
-  margin-top: 4px;
+  margin-top: 8px;
   background-color: var(--bgColor-default);
   border: 0;
 }
@@ -1414,18 +1430,65 @@ h3 {
 .TimelineItem-body strong {
   color: var(--fgColor-default);
 }
+/* github.com's classic timeline row: avatars, the message as muted code, "…" expander, SHA. */
 .TimelineItem-commit {
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 5px;
+  padding-bottom: 6px;
+}
+.TimelineItem-commitLine {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 21px;
+}
+.TimelineItem-commitLine .CommitAvatars {
+  margin-right: 7px;
+}
+.TimelineItem-commitMessage {
+  display: flex;
+  flex: auto;
+  align-items: center;
+  min-width: 0;
+  padding-right: 4px;
 }
 .TimelineItem-commitTitle {
   min-width: 0;
   overflow: hidden;
-  color: var(--fgColor-default);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fgColor-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.TimelineItem-sha {
+.TimelineItem-expander {
+  flex-shrink: 0;
+  height: 12px;
+  margin-left: 5px;
+  padding: 0 5px 5px;
   font-size: 12px;
+  font-weight: 600;
+  line-height: 6px;
+  color: var(--fgColor-default);
+  background-color: var(--bgColor-neutral-muted);
+  border: 0;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.TimelineItem-commitBody {
+  margin: 4px 0 0 36px;
+  font-size: 12px;
+  color: var(--fgColor-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.TimelineItem-sha {
+  flex-shrink: 0;
+  margin-left: 4px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--fgColor-muted);
 }
 .MergeBox {
@@ -1454,7 +1517,7 @@ h3 {
 .MergeBox-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 16px;
   border-top: var(--borderWidth-thin) solid var(--borderColor-default);
 }
@@ -1466,12 +1529,39 @@ h3 {
   min-width: 0;
 }
 .MergeBox-text h3 {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
+  line-height: 24px;
 }
 .MergeBox-sub {
-  font-size: 12px;
   color: var(--fgColor-muted);
+}
+.MergeBox-actions {
+  background-color: var(--bgColor-muted);
+  border-radius: 0 0 var(--borderRadius-medium) var(--borderRadius-medium);
+}
+/* github.com's 32px status circle (PageHeader.tsx StatusBadge). */
+.StatusBadge {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--fgColor-onEmphasis);
+  border-radius: 50%;
+}
+.StatusBadge--success {
+  background-color: var(--bgColor-success-emphasis);
+}
+.StatusBadge--danger {
+  background-color: var(--bgColor-danger-emphasis);
+}
+.StatusBadge--attention {
+  background-color: var(--bgColor-attention-emphasis);
+}
+.StatusBadge--neutral {
+  background-color: var(--bgColor-neutral-emphasis);
 }
 .Conversation-sidebar {
   font-size: 12px;
@@ -1552,18 +1642,11 @@ h3 {
   font-weight: 500;
   overflow-wrap: anywhere;
 }
-.CommitRow-ellipsis {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 8px;
-  vertical-align: middle;
-  padding: 0 4px;
-  height: 12px;
-  color: var(--fgColor-default);
-  background-color: var(--bgColor-neutral-muted);
-  border: 0;
-  border-radius: 1px;
-  cursor: pointer;
+/* github.com: an invisible small icon button right after the title text. */
+.CommitRow-titleLine .CommitRow-ellipsis {
+  display: inline-grid;
+  margin-left: 4px;
+  vertical-align: baseline;
 }
 .CommitRow-meta {
   display: flex;
@@ -1581,12 +1664,13 @@ h3 {
   position: relative;
 }
 .CommitAvatars-item + .CommitAvatars-item {
-  margin-left: -6px;
+  margin-left: -11px;
 }
 .CommitRow-body {
   margin: 8px 0 0;
   font-size: 12px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--fgColor-muted);
 }
 .CommitRow-actions {
@@ -1604,7 +1688,7 @@ h3 {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
 }
 .Checks-headerTitle {

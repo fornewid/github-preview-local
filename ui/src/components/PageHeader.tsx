@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  AlertIcon,
   CheckCircleIcon,
   ChecklistIcon,
   CommentDiscussionIcon,
@@ -13,6 +14,8 @@ import {
   XCircleIcon,
   CheckIcon,
   CircleIcon,
+  XIcon,
+  type Icon,
 } from '@primer/octicons-react'
 import { BranchName, Button, CounterLabel, Heading, IconButton, Label, StateLabel, TextInput } from '@primer/react'
 import { PageHeader } from '@primer/react/experimental'
@@ -74,6 +77,36 @@ export function ChecksStatusIcon({ status, size = 16 }: { status: ChecksSummary[
     default:
       return <GitMergeIcon size={size} fill="var(--fgColor-muted)" />
   }
+}
+
+/** github.com's 32px status circle: the checks page header and the merge box sections. */
+export function StatusBadge({ tone, icon: Glyph }: { tone: 'success' | 'danger' | 'attention' | 'neutral'; icon: Icon }) {
+  return (
+    <span className={`StatusBadge StatusBadge--${tone}`}>
+      <Glyph size={16} />
+    </span>
+  )
+}
+
+export function ChecksStatusBadge({ status }: { status: ChecksSummary['status'] }) {
+  switch (status) {
+    case 'success':
+      return <StatusBadge tone="success" icon={CheckIcon} />
+    case 'failure':
+      return <StatusBadge tone="danger" icon={XIcon} />
+    case 'pending':
+      return <StatusBadge tone="attention" icon={DotFillIcon} />
+    case 'idle':
+      return <StatusBadge tone="neutral" icon={DotFillIcon} />
+    default:
+      return <StatusBadge tone="neutral" icon={GitMergeIcon} />
+  }
+}
+
+/** The merge box's conflicts section: unknown (no merge base check), conflicting or clean. */
+export function ConflictsBadge({ conflicts }: { conflicts: string[] | null | undefined }) {
+  if (conflicts == null) return <StatusBadge tone="neutral" icon={AlertIcon} />
+  return conflicts.length ? <StatusBadge tone="attention" icon={AlertIcon} /> : <StatusBadge tone="success" icon={CheckIcon} />
 }
 
 function CopyBranchButton({ name }: { name: string }) {

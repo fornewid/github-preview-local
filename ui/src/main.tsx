@@ -20,6 +20,8 @@ const html = document.documentElement
 html.dataset.colorMode = theme === 'light' || theme === 'dark' ? theme : theme === 'auto' ? 'auto' : 'dark'
 html.dataset.lightTheme = theme === 'light_high_contrast' ? 'light_high_contrast' : 'light'
 html.dataset.darkTheme = ['dark_dimmed', 'dark_high_contrast'].includes(theme) ? theme : 'dark'
+// The native window (WebKit) picks other fonts than Chrome for the same CSS; prv.css evens that out.
+if ((window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) html.classList.add('prv-native')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

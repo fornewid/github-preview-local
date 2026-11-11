@@ -14,8 +14,9 @@ page, so the reference is captured with a signed-in Chrome profile (see
 | Color tokens | Primer primitives light/dark themes | `@primer/primitives` **11.10.0** (0 differing tokens) |
 | Diff table, file header, toolbar, comment box | GitHub's own CSS modules | `ui/src/styles/prv.css`, rewritten from the values below |
 | Syntax highlighting | `pl-*` classes | starry-night with GitHub's grammars (`pl-*`) |
-| UI font | `"Mona Sans VF", -apple-system, system-ui, "Segoe UI", …` — Mona Sans is **not loaded** signed in, so the system font renders | same stack, nothing bundled |
-| Code font | `--fontStack-monospace` (`ui-monospace, SFMono-Regular, SF Mono, Menlo, …`) | same |
+| UI font | `--fontStack-sansSerif` (`"Mona Sans VF", -apple-system, BlinkMacSystemFont, …`) — Mona Sans is **not loaded** signed in, so the system font renders | same stack, nothing bundled |
+| Code font | `"Monaspace Neon", ui-monospace, SFMono-Regular, SF Mono, Menlo, …` (newer than primitives 11.10) — not loaded either; Chrome, Edge and Firefox skip `ui-monospace`, so code is **Menlo** on a Mac | same stack; the native window (WebKit, where `ui-monospace` is SF Mono) drops `ui-monospace` so it also draws Menlo |
+| Text rendering | `body.text-rendering-optimize-speed` → `text-rendering: optimizeSpeed` (no kerning, no ligatures); `-webkit-font-smoothing` left at `auto` | same (`antialiased` drew thinner text than github.com on macOS) |
 
 ## Page
 

@@ -59,6 +59,17 @@ node breakpoints.mjs $PR ../../.ref/prv.html --from 2560 --to 320
 node breakpoints.mjs $PR ../../.ref/prv.html --from 1600 --to 1012 --panel   # side panel open
 ```
 
+`typography.mjs` compares text, tab by tab: it pairs the texts both pages show (labels, commit
+titles, file names, code lines) and prints each pair whose font differs — the font Chrome really
+draws with, size, weight, line height, letter spacing, color, smoothing, text rendering — and the
+icons whose color differs. Pairs of different elements that happen to share a text (the pull
+request title and a commit title, for example) show up too; skip those:
+
+```bash
+node typography.mjs $PR ../../.ref/prv.html --width 1440
+node typography.mjs $PR ../../.ref/prv.html --width 375
+```
+
 `compare.py` aligns both captures at the pull request toolbar (pass its top in CSS px for each
 side: github.com has a taller global header) and writes side-by-side (`sbs-*.png`) and difference
 (`diff-*.png`) images with the share of differing pixels. Text that is different by nature (title,
