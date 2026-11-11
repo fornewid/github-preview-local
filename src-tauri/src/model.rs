@@ -17,10 +17,8 @@ pub struct Commit {
     pub sha: String,
     pub short: String,
     pub author: String,
-    pub email: String,
     /// Author date (ISO-8601).
     pub date: String,
-    pub committer: String,
     /// Committer date (ISO-8601); GitHub shows and groups commits by it.
     pub committer_date: String,
     /// Names from `Co-authored-by:` trailers.
@@ -57,7 +55,6 @@ pub struct RepoInfo {
     pub name: String,
     pub owner: Option<String>,
     pub root: String,
-    pub remote_url: Option<String>,
     pub host: Option<String>,
 }
 
@@ -98,7 +95,6 @@ pub struct Snapshot {
     /// Files that conflict when merging head into base; None when unknown.
     pub conflicts: Option<Vec<String>>,
     pub existing_pr: Option<ExistingPr>,
-    pub generated_at: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

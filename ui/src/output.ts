@@ -1,5 +1,5 @@
 import type { ReviewResult, Snapshot } from './types'
-import { extOf } from './diff/util'
+import { extOf, plural } from './diff/util'
 
 const FENCE_LANG: Record<string, string> = {
   '.kt': 'kotlin',
@@ -43,7 +43,7 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
   out.push('')
   out.push(
     `\`${r.head.name}\` (${r.head.sha.slice(0, 7)}) → \`${r.base.name}\` (merge-base ${r.mergeBase.slice(0, 7)}) · ` +
-      `${s.files.length} file${s.files.length === 1 ? '' : 's'} · ${n} comment${n === 1 ? '' : 's'}`,
+      `${plural(s.files.length, 'file')} · ${plural(n, 'comment')}`,
   )
   out.push('')
   if (r.event === 'CONFIRM') {

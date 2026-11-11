@@ -15,7 +15,8 @@ import type {
   Snapshot,
 } from './types'
 import { formatReview } from './output'
-import { viewedKey } from './diff/util'
+import { contentKey, isViewed, sidePath, viewedKey, type ContentSide } from './diff/util'
+import { MEDIA, mediaMatches } from './media'
 
 export type DiffView = 'split' | 'unified'
 export type Tab = 'conversation' | 'commits' | 'checks' | 'files'
@@ -31,7 +32,6 @@ export interface Settings {
   compact: boolean
   minimizeComments: boolean
   treeVisible: boolean
-  treeWidth: number
   /** Native window zoom (browsers keep their own). */
   zoom: number
 }
@@ -60,21 +60,25 @@ interface FileUI {
 const SETTINGS_KEY = 'prv:settings'
 const MAX_CHECK_OUTPUT = 200_000
 
+/** The settings as saved (never "Hide for this diff only", nor the URL's overrides). */
+function savedSettings(): Partial<Settings> {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') ?? {}
+  } catch {
+    return {}
+  }
+}
+
 function loadSettings(): Settings {
   const fromUrl = new URLSearchParams(location.search)
-  let s: Settings = {
+  const s: Settings = {
     diffView: 'split',
     hideWhitespace: false,
     compact: true,
     minimizeComments: false,
     treeVisible: true,
-    treeWidth: 296,
     zoom: 1,
-  }
-  try {
-    s = { ...s, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') }
-  } catch {
-    /* ignore */
+    ...savedSettings(),
   }
   const diff = fromUrl.get('diff')
   if (diff === 'split' || diff === 'unified') s.diffView = diff
@@ -85,7 +89,22 @@ function loadSettings(): Settings {
 
 /** Confirm (push + pull request) needs the native window and the full branch, not a commit range. */
 export function canConfirm(s: Pick<Store, 'transport' | 'range'>) {
-  return !!s.transport?.capabilities.publish && !s.range.from
+  return s.transport?.kind === 'native' && !s.range.from
+}
+
+/** The pull request already open for this branch: as looked up for Confirm, else from the snapshot. */
+export function useOpenPr() {
+  return useStore((st) => st.existingPr?.pr ?? st.snapshot?.existingPr ?? null)
+}
+
+/**
+ * The side panel on the Files page: `visible` to the user (a docked panel hidden by a window too
+ * narrow for it counts as closed: github.com then offers "Open …") and `docked` beside the page now.
+ * `wide`: the window is wide enough to dock it (MEDIA.dockedPanel).
+ */
+export function panelLayout(s: Pick<Store, 'panel' | 'panelDialog' | 'tab'>, wide: boolean) {
+  const open = !!s.panel && s.tab === 'files'
+  return { visible: open && (s.panelDialog || wide), docked: open && !s.panelDialog && wide }
 }
 
 /** `from..to` for a commit range, '' for all changes. */
@@ -114,7 +133,7 @@ export interface Store {
   reviewDraft: { body: string; event: ReviewEvent; draft: boolean; error: string | null }
   lastReview: PersistedState['lastReview']
   range: SnapshotQuery
-  filter: { exts: string[] | null; showViewed: boolean; showDeleted: boolean; text: string }
+  filter: { exts: string[] | null; showViewed: boolean; text: string }
   fileUI: Record<string, FileUI>
   viewed: Record<string, string>
   drafts: ReviewComment[]
@@ -135,7 +154,7 @@ export interface Store {
   init(t: Transport): Promise<void>
   reload(q?: SnapshotQuery): Promise<void>
   setTab(t: Tab): void
-  applySettings(s: Partial<Settings>, persist?: boolean): void
+  applySettings(s: Partial<Settings>): void
   setPanel(p: Panel | null): void
   setTreeDialog(open: boolean): void
   /** Opens the review overlay (optionally preselecting an event) or closes it with `null`. */
@@ -161,6 +180,11 @@ export interface Store {
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 const checkWaiters = new Map<string, (s: CheckStatus) => void>()
+
+const EMPTY_REVIEW: Store['reviewDraft'] = { body: '', event: 'COMMENT', draft: false, error: null }
+
+const finished = (s: CheckStatus | undefined): s is 'success' | 'failure' | 'cancelled' =>
+  s === 'success' || s === 'failure' || s === 'cancelled'
 
 function stateOf(s: Store): PersistedState {
   return { viewed: s.viewed, drafts: s.drafts, prTitle: s.prTitle, prBody: s.prBody, lastReview: s.lastReview }
@@ -188,10 +212,10 @@ export const useStore = create<Store>((set, get) => ({
   panelDialog: false,
   treeDialog: false,
   reviewOpen: false,
-  reviewDraft: { body: '', event: 'COMMENT', draft: false, error: null },
+  reviewDraft: EMPTY_REVIEW,
   lastReview: null,
   range: {},
-  filter: { exts: null, showViewed: true, showDeleted: true, text: '' },
+  filter: { exts: null, showViewed: true, text: '' },
   fileUI: {},
   viewed: {},
   drafts: [],
@@ -226,7 +250,7 @@ export const useStore = create<Store>((set, get) => ({
       set({ error: String(e), loading: false })
       return
     }
-    if (!t.capabilities.checks) return
+    if (t.kind !== 'native') return
     // A broken .gh-prv-local.toml only affects the Checks tab.
     try {
       const defs = await t.listChecks()
@@ -243,18 +267,17 @@ export const useStore = create<Store>((set, get) => ({
             output += e.chunk
             if (output.length > MAX_CHECK_OUTPUT) output = '…\n' + output.slice(-MAX_CHECK_OUTPUT)
           }
-          const done = e.status === 'success' || e.status === 'failure' || e.status === 'cancelled'
           return {
             ...c,
             status: e.status ?? c.status,
             exitCode: e.exitCode ?? c.exitCode,
             output,
             startedAt: e.status === 'running' ? new Date().toISOString() : c.startedAt,
-            finishedAt: done ? new Date().toISOString() : c.finishedAt,
+            finishedAt: finished(e.status) ? new Date().toISOString() : c.finishedAt,
           }
         }),
       }))
-      if (e.status === 'success' || e.status === 'failure' || e.status === 'cancelled') {
+      if (finished(e.status)) {
         checkWaiters.get(e.name)?.(e.status)
         checkWaiters.delete(e.name)
       }
@@ -281,30 +304,23 @@ export const useStore = create<Store>((set, get) => ({
     window.scrollTo({ top: 0 })
   },
 
-  applySettings(s, persist = true) {
+  applySettings(s) {
     const settings = { ...get().settings, ...s }
-    if (persist) {
-      // "Hide for this diff only" is never saved.
-      const saved = { ...settings, hideWhitespace: settings.hideWhitespaceDiffOnly ? false : settings.hideWhitespace }
-      delete saved.hideWhitespaceDiffOnly
-      try {
-        const prev = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}')
-        if (settings.hideWhitespaceDiffOnly) saved.hideWhitespace = !!prev.hideWhitespace
-      } catch {
-        /* ignore */
-      }
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved))
+    // "Hide for this diff only" is never saved: the saved choice stays.
+    const saved = {
+      ...settings,
+      hideWhitespace: settings.hideWhitespaceDiffOnly ? !!savedSettings().hideWhitespace : settings.hideWhitespace,
     }
+    delete saved.hideWhitespaceDiffOnly
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved))
     set({ settings })
   },
 
   setPanel: (panel) =>
     set((s) => {
-      const wide = window.matchMedia('(min-width: 1012px)').matches
-      // A docked panel hidden by a narrow window counts as closed (github.com shows "Open …").
-      const visible = !!s.panel && (s.panelDialog || wide)
+      const wide = mediaMatches(MEDIA.dockedPanel)
       // Decided when a panel opens; switching between visible panels keeps it.
-      return { panel, panelDialog: !panel ? false : visible ? s.panelDialog : !wide }
+      return { panel, panelDialog: !panel ? false : panelLayout(s, wide).visible ? s.panelDialog : !wide }
     }),
   setTreeDialog: (treeDialog) => set({ treeDialog }),
   openReview: (e) => {
@@ -334,7 +350,7 @@ export const useStore = create<Store>((set, get) => ({
 
   toggleViewed(f) {
     const viewed = { ...get().viewed }
-    const on = viewed[f.path] !== viewedKey(f)
+    const on = !isViewed(viewed, f)
     if (on) viewed[f.path] = viewedKey(f)
     else delete viewed[f.path]
     set({ viewed })
@@ -345,20 +361,20 @@ export const useStore = create<Store>((set, get) => ({
   ensureContents(f) {
     const { transport, snapshot, contents, generation, loading } = get()
     if (!transport || !snapshot || loading || f.binary || f.submodule) return
-    const sides: Array<['old' | 'new', string]> = []
-    if (f.status !== 'added') sides.push(['old', f.oldPath ?? f.path])
-    if (f.status !== 'deleted') sides.push(['new', f.path])
-    for (const [side, path] of sides) {
-      const key = `${side}:${path}`
+    const sides: ContentSide[] = []
+    if (f.status !== 'added') sides.push('old')
+    if (f.status !== 'deleted') sides.push('new')
+    for (const side of sides) {
+      const key = contentKey(f, side)
       if (key in contents) continue
       set((s) => ({ contents: { ...s.contents, [key]: null } }))
       transport
-        .getContents(path, side, snapshot)
+        .getContents(f, side)
         .then((text) => {
           if (get().generation !== generation) return
           set((s) => ({ contents: { ...s.contents, [key]: text } }))
           if (text != null)
-            void highlightFile(text, path).then((lines) => {
+            void highlightFile(text, sidePath(f, side)).then((lines) => {
               if (get().generation === generation) set((s) => ({ hl: { ...s.hl, [key]: lines } }))
             })
         })
@@ -430,7 +446,7 @@ export const useStore = create<Store>((set, get) => ({
   async findPr() {
     const t = get().transport
     const cur = get().existingPr
-    if (!t?.capabilities.publish || cur?.loading || (cur && !cur.error)) return
+    if (t?.kind !== 'native' || cur?.loading || (cur && !cur.error)) return
     set({ existingPr: { loading: true, pr: null, error: null } })
     try {
       set({ existingPr: { loading: false, pr: await t.findPr(), error: null } })
@@ -470,7 +486,7 @@ export const useStore = create<Store>((set, get) => ({
       submitted: { result, markdown },
       drafts: [],
       lastReview: { head: snapshot.head.sha, at: new Date().toISOString() },
-      reviewDraft: { body: '', event: 'COMMENT', draft: false, error: null },
+      reviewDraft: EMPTY_REVIEW,
     })
     // Persist the cleared drafts *before* the native window exits (the native side clears them too).
     try {

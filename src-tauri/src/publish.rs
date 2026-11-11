@@ -9,10 +9,17 @@ use std::time::Duration;
 const PUSH_TIMEOUT: Duration = Duration::from_secs(300);
 const GH_TIMEOUT: Duration = Duration::from_secs(120);
 
-fn gh_repo(s: &Snapshot) -> Option<String> {
-    let owner = s.repo.owner.as_deref()?;
-    let host = s.repo.host.as_deref().unwrap_or("github.com");
-    Some(format!("{host}/{owner}/{}", s.repo.name))
+/// The GitHub host of `origin` (github.com when its URL does not say).
+fn gh_host(s: &Snapshot) -> &str {
+    s.repo.host.as_deref().unwrap_or("github.com")
+}
+
+/// `host/owner/name` of `origin`, for `gh -R`.
+fn gh_repo(s: &Snapshot) -> Result<String, String> {
+    let owner = s.repo.owner.as_deref().ok_or(
+        "could not determine the GitHub repository from the URL of `origin` (the only remote gh-prv-local uses)",
+    )?;
+    Ok(format!("{}/{owner}/{}", gh_host(s), s.repo.name))
 }
 
 fn run(mut cmd: Command, log: &mut String, stdin: Option<&str>, timeout: Duration) -> Result<String, String> {
@@ -48,7 +55,7 @@ fn gh(git: &Git) -> Command {
 /// Returns (PR into the previewed base, PR into another base). Pull requests
 /// from forks that happen to use the same branch name are ignored.
 fn find_prs(git: &Git, s: &Snapshot) -> Result<(Option<ExistingPr>, Option<(ExistingPr, String)>), String> {
-    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the URL of `origin` (the only remote gh-prv-local uses)")?;
+    let repo = gh_repo(s)?;
     let mut log = String::new();
     let mut list = gh(git);
     list.args([
@@ -114,12 +121,12 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
             );
         }
     }
-    let repo = gh_repo(s).ok_or("could not determine the GitHub repository from the URL of `origin` (the only remote gh-prv-local uses)")?;
-    let host = s.repo.host.clone().unwrap_or_else(|| "github.com".into());
+    let repo = gh_repo(s)?;
+    let host = gh_host(s);
 
     // Fail before pushing when gh is missing or not logged in to this host.
     let mut auth = gh(git);
-    auth.args(["auth", "status", "--hostname", &host]);
+    auth.args(["auth", "status", "--hostname", host]);
     run(auth, &mut log, None, GH_TIMEOUT).map_err(|e| {
         format!("The GitHub CLI (`gh`) must be installed and logged in to {host} (`gh auth login --hostname {host}`).\n\n{e}")
     })?;

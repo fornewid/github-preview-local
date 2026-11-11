@@ -108,11 +108,7 @@ pub fn kill_descendants(child: &mut Child) {
         }
     }
     #[cfg(windows)]
-    let _ = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &child.id().to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    kill_group(child.id());
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -150,18 +146,24 @@ fn spawn_reader(mut pipe: Box<dyn Read + Send>, tx: mpsc::SyncSender<String>) {
     });
 }
 
-/// Runs a command to completion with a timeout, optional stdin, and both pipes
-/// drained concurrently (no deadlock on large output).
-pub fn run(mut cmd: Command, stdin: Option<&str>, timeout: Duration) -> std::io::Result<Output> {
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+/// Spawns `cmd` with `input` written to its stdin from another thread, so a child that fills
+/// its output pipe before reading all of its input cannot deadlock. No input: stdin is null.
+pub fn spawn_with_input(cmd: &mut Command, input: Option<String>) -> std::io::Result<Child> {
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() });
     let mut child = cmd.spawn()?;
-    if let (Some(input), Some(mut pipe)) = (stdin.map(str::to_owned), child.stdin.take()) {
+    if let (Some(input), Some(mut pipe)) = (input, child.stdin.take()) {
         std::thread::spawn(move || {
             let _ = pipe.write_all(input.as_bytes());
         });
     }
+    Ok(child)
+}
+
+/// Runs a command to completion with a timeout, optional stdin, and both pipes
+/// drained concurrently (no deadlock on large output).
+pub fn run(mut cmd: Command, stdin: Option<&str>, timeout: Duration) -> std::io::Result<Output> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = spawn_with_input(&mut cmd, stdin.map(str::to_owned))?;
     let (otx, orx) = mpsc::sync_channel(64);
     let (etx, erx) = mpsc::sync_channel(64);
     if let Some(p) = child.stdout.take() {
@@ -208,7 +210,8 @@ pub fn run(mut cmd: Command, stdin: Option<&str>, timeout: Duration) -> std::io:
 const FLUSH_EVERY: Duration = Duration::from_millis(100);
 const FLUSH_SIZE: usize = 64 * 1024;
 
-fn keep_tail(buf: &mut String, max: usize) {
+/// Keeps about the last `max` bytes (whole characters), after a truncation marker.
+pub fn keep_tail(buf: &mut String, max: usize) {
     if buf.len() <= max {
         return;
     }
@@ -333,6 +336,13 @@ pub fn on_terminate(f: impl Fn() + Send + 'static) {
 mod tests {
     use super::*;
 
+    /// No process runs exactly `worker` (a command line unique to the test) shortly after a kill.
+    fn assert_no_survivors(worker: &str) {
+        std::thread::sleep(Duration::from_millis(300));
+        let left = Command::new("pgrep").args(["-fl", &format!("^{}$", worker.replace('.', "[.]"))]).output().unwrap();
+        assert!(String::from_utf8_lossy(&left.stdout).trim().is_empty(), "survivors: {}", String::from_utf8_lossy(&left.stdout));
+    }
+
     #[test]
     fn timeout_kills_a_forking_tree() {
         // A parent that keeps forking workers: none may survive the timeout.
@@ -342,9 +352,7 @@ mod tests {
         cmd.args(["-c", &format!("while true; do {worker} & sleep 0.01; done")]);
         let out = run(cmd, None, Duration::from_millis(800)).unwrap();
         assert!(out.timed_out);
-        std::thread::sleep(Duration::from_millis(300));
-        let left = Command::new("pgrep").args(["-fl", &format!("^{}$", worker.replace('.', "[.]"))]).output().unwrap();
-        assert!(String::from_utf8_lossy(&left.stdout).trim().is_empty(), "survivors: {}", String::from_utf8_lossy(&left.stdout));
+        assert_no_survivors(&worker);
     }
 
     #[test]
@@ -357,9 +365,7 @@ mod tests {
         let out = run(cmd, None, Duration::from_millis(1500)).unwrap();
         assert!(out.timed_out);
         assert!(start.elapsed() < Duration::from_secs(4), "took {:?}", start.elapsed());
-        std::thread::sleep(Duration::from_millis(300));
-        let left = Command::new("pgrep").args(["-fl", &format!("^{}$", worker.replace('.', "[.]"))]).output().unwrap();
-        assert!(String::from_utf8_lossy(&left.stdout).trim().is_empty(), "survivors: {}", String::from_utf8_lossy(&left.stdout));
+        assert_no_survivors(&worker);
     }
 
     #[test]

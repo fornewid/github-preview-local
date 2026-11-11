@@ -14,12 +14,12 @@ import {
   XCircleFillIcon,
 } from '@primer/octicons-react'
 import { ActionList, ActionMenu, Button, IconButton, Label } from '@primer/react'
-import { canConfirm, useStore } from '../store'
+import { canConfirm, useOpenPr, useStore } from '../store'
 import { Avatar, CopyButton, Markdown, copyText } from './common'
-import { MarkdownEditor } from './MarkdownEditor'
-import { ChecksStatusBadge, ConflictsBadge, useChecksSummary } from './PageHeader'
+import { EditForm } from './MarkdownEditor'
+import { ChecksStatusBadge, ConflictsBadge, conflictsText, confirmLabel, useChecksSummary } from './PageHeader'
 import { commitLine } from './changes/Toolbar'
-import { longDate, plural } from '../diff/util'
+import { commitAuthors, longDate, plural } from '../diff/util'
 import type { CheckState, CheckStatus, Commit } from '../types'
 
 export function CheckStatusIcon({ status }: { status: CheckStatus }) {
@@ -49,10 +49,10 @@ export function ConversationTab() {
   const openReview = useStore((st) => st.openReview)
   const transport = useStore((st) => st.transport)
   const range = useStore((st) => st.range)
-  const existing = useStore((st) => st.existingPr)
-  const pr = existing?.pr ?? s.existingPr
+  const pr = useOpenPr()
   const confirmable = canConfirm({ transport, range })
   const checks = useChecksSummary()
+  const conflicts = conflictsText(s.conflicts, (files) => files.slice(0, 5).join(', '))
   const [editing, setEditing] = useState(false)
   const [body, setBody] = useState(prBody)
   return (
@@ -88,21 +88,18 @@ export function ConversationTab() {
             </div>
             <div className="TimelineComment-body">
               {editing ? (
-                <div>
-                  <MarkdownEditor value={body} onChange={setBody} autoFocus rows={10} label="Pull request description" />
-                  <div className="InlineComment-footer">
-                    <Button onClick={() => setEditing(false)}>Cancel</Button>
-                    <Button
-                      variant="primary"
-                      onClick={() => {
-                        setPr(null, body)
-                        setEditing(false)
-                      }}
-                    >
-                      Update comment
-                    </Button>
-                  </div>
-                </div>
+                <EditForm
+                  value={body}
+                  onChange={setBody}
+                  rows={10}
+                  label="Pull request description"
+                  saveLabel="Update comment"
+                  onCancel={() => setEditing(false)}
+                  onSave={() => {
+                    setPr(null, body)
+                    setEditing(false)
+                  }}
+                />
               ) : prBody.trim() ? (
                 <Markdown source={prBody} />
               ) : (
@@ -167,20 +164,8 @@ export function ConversationTab() {
             <div className="MergeBox-row">
               <ConflictsBadge conflicts={s.conflicts} />
               <div className="MergeBox-text">
-                <h3>
-                  {s.conflicts == null
-                    ? 'Merge status unknown'
-                    : s.conflicts.length
-                      ? 'This branch has conflicts that must be resolved'
-                      : 'No conflicts with base branch'}
-                </h3>
-                <div className="MergeBox-sub">
-                  {s.conflicts == null
-                    ? 'Conflicts could not be checked for this view.'
-                    : s.conflicts.length
-                      ? s.conflicts.slice(0, 5).join(', ')
-                      : 'Merging can be performed automatically.'}
-                </div>
+                <h3>{conflicts.title}</h3>
+                <div className="MergeBox-sub">{conflicts.sub}</div>
               </div>
             </div>
             <div className="MergeBox-row MergeBox-actions">
@@ -193,7 +178,7 @@ export function ConversationTab() {
                   openReview('CONFIRM')
                 }}
               >
-                {pr ? `Confirm and push to #${pr.number}` : 'Confirm and create pull request'}
+                {confirmLabel(pr)}
               </Button>
             </div>
           </div>
@@ -226,7 +211,7 @@ export function ConversationTab() {
 }
 
 function CommitAvatars({ c }: { c: Commit }) {
-  const names = [c.author, ...c.coAuthors.filter((n) => n !== c.author)].slice(0, 3)
+  const names = commitAuthors(c).slice(0, 3)
   return (
     <span className="CommitAvatars" aria-hidden>
       {names.map((n, i) => (
@@ -352,13 +337,13 @@ export function CommitsTab() {
 export function ChecksTab() {
   const checks = useStore((st) => st.checks)
   const checksError = useStore((st) => st.checksError)
-  const transport = useStore((st) => st.transport)!
+  const native = useStore((st) => st.transport?.kind === 'native')
   const s = useStore((st) => st.snapshot)!
   const summary = useChecksSummary()
   const { runCheck, runAllChecks, cancelCheck } = useStore.getState()
   const [selected, setSelected] = useState<string | null>(null)
   const last = s.commits[s.commits.length - 1]
-  if (!transport.capabilities.checks)
+  if (!native)
     return (
       <div className="Blankslate-box">
         <h3>Local checks run in the native window</h3>
@@ -386,7 +371,7 @@ export function ChecksTab() {
       </div>
     )
   const cur: CheckState | undefined = checks.find((c) => c.name === selected)
-  const running = checks.some((c) => c.status === 'running' || c.status === 'queued')
+  const { running } = summary
   return (
     <div className="Checks">
       <div className="Checks-header">

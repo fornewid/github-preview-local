@@ -37,11 +37,17 @@ export function CopyButton({
   label = 'Copy',
   className = '',
   size = 'small',
+  copiedLabel = 'Copied!',
+  stopPropagation = true,
 }: {
   text: string
   label?: string
   className?: string
   size?: 'small' | 'medium'
+  /** The label for 2s after copying; `null` keeps `label`. */
+  copiedLabel?: string | null
+  /** Keep the click from reaching the page (false: it propagates). */
+  stopPropagation?: boolean
 }) {
   const [done, setDone] = useState(false)
   return (
@@ -50,9 +56,9 @@ export function CopyButton({
       size={size}
       variant="invisible"
       icon={done ? CheckIcon : CopyIcon}
-      aria-label={done ? 'Copied!' : label}
+      aria-label={done && copiedLabel !== null ? copiedLabel : label}
       onClick={(e) => {
-        e.stopPropagation()
+        if (stopPropagation) e.stopPropagation()
         void copyText(text).then(() => {
           setDone(true)
           setTimeout(() => setDone(false), 2000)

@@ -13,15 +13,14 @@ import { createTransport } from './transport'
 import { useStore } from './store'
 import { runSelftest } from './selftest'
 
-// Theme selection mirrors github.com's <html data-color-mode data-light-theme data-dark-theme>.
-const params = new URLSearchParams(location.search)
-const theme = params.get('theme') ?? localStorage.getItem('prv:theme') ?? 'auto'
+// Theme selection (`?theme=`) mirrors github.com's <html data-color-mode data-light-theme data-dark-theme>.
+const theme = new URLSearchParams(location.search).get('theme') ?? 'auto'
 const html = document.documentElement
-html.dataset.colorMode = theme === 'light' || theme === 'dark' ? theme : theme === 'auto' ? 'auto' : 'dark'
+html.dataset.colorMode = theme === 'auto' ? 'auto' : theme === 'light' || theme === 'light_high_contrast' ? 'light' : 'dark'
 html.dataset.lightTheme = theme === 'light_high_contrast' ? 'light_high_contrast' : 'light'
 html.dataset.darkTheme = ['dark_dimmed', 'dark_high_contrast'].includes(theme) ? theme : 'dark'
 // The native window (WebKit) picks other fonts than Chrome for the same CSS; prv.css evens that out.
-if ((window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) html.classList.add('prv-native')
+if (window.__TAURI_INTERNALS__) html.classList.add('prv-native')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

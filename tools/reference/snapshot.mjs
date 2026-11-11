@@ -4,10 +4,8 @@
 // and diff the JSON against the previous snapshot.
 //
 //   node snapshot.mjs <pull request URL> <outDir> [light|dark] [profileDir]
-import { chromium } from 'playwright-core'
 import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import { gotoGithub, openGithub, prBase } from './common.mjs'
 
 const [, , prUrl, outDir, scheme = 'light', profileArg] = process.argv
 // Captures hold your signed-in page: write them only where you choose (e.g. .ref/, ignored by git).
@@ -15,22 +13,11 @@ if (!prUrl || !outDir) {
   console.error('usage: node snapshot.mjs <https://github.com/o/r/pull/N> <outDir> [light|dark] [profileDir]')
   process.exit(1)
 }
-const profile = profileArg || path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile')
 fs.mkdirSync(outDir, { recursive: true })
-const ctx = await chromium.launchPersistentContext(profile, {
-  channel: 'chrome',
-  headless: true,
-  viewport: { width: 1440, height: 900 },
-  deviceScaleFactor: 2,
-  colorScheme: scheme,
-  locale: 'en-US',
-  // login.mjs signs in with a plain Chrome, which encrypts cookies with the real keychain.
-  ignoreDefaultArgs: ['--use-mock-keychain'],
-})
-const page = ctx.pages()[0] || (await ctx.newPage())
-const base = prUrl.replace(/\/(files|changes).*$/, '').replace(/\/$/, '')
+const { ctx, page } = await openGithub({ scheme, scale: 2, profile: profileArg || undefined })
+const base = prBase(prUrl)
 
-export const STYLE_PROPS = [
+const STYLE_PROPS = [
   'display', 'position', 'font-family', 'font-size', 'font-weight', 'line-height', 'color', 'background-color',
   'border-top', 'border-right', 'border-bottom', 'border-left', 'border-radius', 'padding', 'margin', 'gap',
   'box-shadow', 'width', 'height', 'white-space', 'tab-size', 'text-decoration', 'opacity', 'cursor',
@@ -76,12 +63,7 @@ async function structure(root = 'body') {
   )
 }
 
-const go = async (q) => {
-  // Signed-in pages keep live-update connections open, so wait for content instead of network idle.
-  await page.goto(base + q, { waitUntil: 'domcontentloaded', timeout: 90000 })
-  await page.waitForSelector(q.startsWith('/changes') || q.startsWith('/files') ? 'table' : 'main', { timeout: 60000 }).catch(() => {})
-  await page.waitForTimeout(3000)
-}
+const go = (q) => gotoGithub(page, base + q, { selector: q.startsWith('/changes') || q.startsWith('/files') ? 'table' : 'main', optional: true })
 
 const login = await (async () => {
   await go('')

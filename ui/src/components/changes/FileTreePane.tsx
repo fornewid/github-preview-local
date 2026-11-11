@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { FileAddedIcon, FileDiffIcon, FileMovedIcon, FileRemovedIcon, FilterIcon, SearchIcon } from '@primer/octicons-react'
 import { ActionList, ActionMenu, CounterLabel, Dialog, IconButton, TextInput, TreeView } from '@primer/react'
 import { useStore } from '../../store'
 import { buildTree, type TreeNode } from '../../diff/tree'
 import type { FileDiff } from '../../types'
-import { anchorFor, extOf, viewedKey } from '../../diff/util'
-import { scrollToFile } from './Toolbar'
+import { anchorFor, extLabel, isViewed } from '../../diff/util'
+import { revealFile } from './DiffEntry'
 
 export function FileStatusIcon({ f }: { f: FileDiff }) {
   switch (f.status) {
@@ -54,7 +54,6 @@ export function FileTreePane({ files, all, onNavigate }: { files: FileDiff[]; al
   const exts = useStore((st) => st.filter.exts)
   const showViewed = useStore((st) => st.filter.showViewed)
   const setFilter = useStore((st) => st.setFilter)
-  const viewed = useStore((st) => st.viewed)
   const shown = useMemo(() => {
     const q = text.trim().toLowerCase()
     return q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files
@@ -64,7 +63,7 @@ export function FileTreePane({ files, all, onNavigate }: { files: FileDiff[]; al
   const extCounts = useMemo(() => {
     const m = new Map<string, number>()
     for (const f of all) {
-      const e = extOf(f.path) || 'No extension'
+      const e = extLabel(f.path)
       m.set(e, (m.get(e) ?? 0) + 1)
     }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
@@ -76,46 +75,6 @@ export function FileTreePane({ files, all, onNavigate }: { files: FileDiff[]; al
     const next = cur.includes(e) ? cur.filter((x) => x !== e) : [...cur, e]
     setFilter({ exts: next.length === allExts.length ? null : next })
   }
-
-  const render = (nodes: TreeNode[]) =>
-    nodes.map((n) => {
-      if (n.file) {
-        const f = n.file
-        const isViewed = viewed[f.path] === viewedKey(f)
-        return (
-          <TreeView.Item
-            key={n.path}
-            id={`tree-${n.path}`}
-            className="FileTree-file"
-            current={current === f.path}
-            onSelect={() => {
-              useStore.getState().toggleCollapsed(f.path, false)
-              if (onNavigate) {
-                // The dialog closes first, then the page scrolls to the file.
-                onNavigate()
-                requestAnimationFrame(() => scrollToFile(f.path))
-              } else scrollToFile(f.path)
-            }}
-          >
-            <TreeView.LeadingVisual>
-              <FileStatusIcon f={f} />
-            </TreeView.LeadingVisual>
-            <span className={`FileTree-name ${isViewed ? 'is-viewed' : ''}`} title={f.path}>
-              {n.name}
-            </span>
-          </TreeView.Item>
-        )
-      }
-      return (
-        <TreeView.Item key={n.path} id={`tree-${n.path}`} defaultExpanded>
-          <TreeView.LeadingVisual>
-            <TreeView.DirectoryIcon />
-          </TreeView.LeadingVisual>
-          {n.name}
-          <TreeView.SubTree>{render(n.children)}</TreeView.SubTree>
-        </TreeView.Item>
-      )
-    })
 
   return (
     <div className={`FileTree ${onNavigate ? 'FileTree--dialog' : ''}`} id="pr-file-tree">
@@ -160,7 +119,7 @@ export function FileTreePane({ files, all, onNavigate }: { files: FileDiff[]; al
         <h2 className="sr-only">File tree</h2>
         {tree.length ? (
           <TreeView aria-label="File Tree" className="FileTree-tree">
-            {render(tree)}
+            <TreeItems nodes={tree} current={current} onNavigate={onNavigate} />
           </TreeView>
         ) : (
           <div className="FileTree-empty">No files match the current filter.</div>
@@ -170,12 +129,74 @@ export function FileTreePane({ files, all, onNavigate }: { files: FileDiff[]; al
   )
 }
 
+/**
+ * Tree items. Memoized, so scrolling (the current file) or marking a file viewed re-renders only
+ * the items that changed: a directory gets `current` only while the current file is inside it.
+ */
+function TreeItems({ nodes, current, onNavigate }: { nodes: TreeNode[]; current: string | null; onNavigate?: () => void }) {
+  return nodes.map((n) =>
+    n.file ? (
+      <FileItem key={n.path} file={n.file} name={n.name} current={current === n.path} onNavigate={onNavigate} />
+    ) : (
+      <DirItem key={n.path} node={n} current={current?.startsWith(n.path + '/') ? current : null} onNavigate={onNavigate} />
+    ),
+  )
+}
+
+const DirItem = memo(function DirItem({ node, current, onNavigate }: { node: TreeNode; current: string | null; onNavigate?: () => void }) {
+  return (
+    <TreeView.Item id={`tree-${node.path}`} defaultExpanded>
+      <TreeView.LeadingVisual>
+        <TreeView.DirectoryIcon />
+      </TreeView.LeadingVisual>
+      {node.name}
+      <TreeView.SubTree>
+        <TreeItems nodes={node.children} current={current} onNavigate={onNavigate} />
+      </TreeView.SubTree>
+    </TreeView.Item>
+  )
+})
+
+const FileItem = memo(function FileItem({
+  file,
+  name,
+  current,
+  onNavigate,
+}: {
+  file: FileDiff
+  name: string
+  current: boolean
+  onNavigate?: () => void
+}) {
+  const viewed = useStore((st) => isViewed(st.viewed, file))
+  return (
+    <TreeView.Item
+      id={`tree-${file.path}`}
+      className="FileTree-file"
+      current={current}
+      onSelect={() => {
+        // In the dialog, it closes first, then the page scrolls to the file.
+        onNavigate?.()
+        revealFile(file.path)
+      }}
+    >
+      <TreeView.LeadingVisual>
+        <FileStatusIcon f={file} />
+      </TreeView.LeadingVisual>
+      <span className={`FileTree-name ${viewed ? 'is-viewed' : ''}`} title={file.path}>
+        {name}
+      </span>
+    </TreeView.Item>
+  )
+})
+
+const closeTreeDialog = () => useStore.getState().setTreeDialog(false)
+
 /** Narrow windows: github.com opens the tree as a "Files" dialog from the left (fullscreen below 768px). */
 export function FileTreeDialog({ files, all }: { files: FileDiff[]; all: FileDiff[] }) {
-  const close = () => useStore.getState().setTreeDialog(false)
   return (
-    <Dialog title="Files" width="xlarge" position={{ narrow: 'fullscreen', regular: 'left' }} onClose={close} className="FileTreeDialog">
-      <FileTreePane files={files} all={all} onNavigate={close} />
+    <Dialog title="Files" width="xlarge" position={{ narrow: 'fullscreen', regular: 'left' }} onClose={closeTreeDialog} className="FileTreeDialog">
+      <FileTreePane files={files} all={all} onNavigate={closeTreeDialog} />
     </Dialog>
   )
 }

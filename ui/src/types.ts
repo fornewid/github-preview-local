@@ -14,10 +14,8 @@ export interface Commit {
   sha: string
   short: string
   author: string
-  email: string
   /** ISO-8601 author date */
   date: string
-  committer: string
   /** ISO-8601 committer date (GitHub lists and groups commits by it). */
   committerDate: string
   /** Names from Co-authored-by trailers, one per email address. */
@@ -61,7 +59,6 @@ export interface Snapshot {
     name: string
     owner?: string | null
     root: string
-    remoteUrl?: string | null
     host?: string | null
   }
   base: RefInfo
@@ -84,7 +81,6 @@ export interface Snapshot {
   /** Paths that conflict when merging into the base branch; null when unknown. */
   conflicts?: string[] | null
   existingPr?: ExistingPr | null
-  generatedAt: string
 }
 
 export type Side = 'LEFT' | 'RIGHT'

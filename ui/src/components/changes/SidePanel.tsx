@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertIcon,
   CheckCircleFillIcon,
@@ -11,12 +11,24 @@ import {
   XIcon,
 } from '@primer/octicons-react'
 import { ActionList, ActionMenu, Button, Dialog, IconButton, SegmentedControl } from '@primer/react'
-import { canConfirm, useStore, type Panel } from '../../store'
+import { canConfirm, useOpenPr, useStore, type Panel } from '../../store'
+import type { CheckStatus } from '../../types'
 import { Avatar, Markdown } from '../common'
-import { MarkdownEditor } from '../MarkdownEditor'
-import { ChecksStatusIcon, useChecksSummary } from '../PageHeader'
-import { anchorFor, plural } from '../../diff/util'
-import { clampSidePanel, setSidePanelWidth, SIDE_PANEL, sidePanelMax, useSidePanelWidth } from '../../layout'
+import { EditForm } from '../MarkdownEditor'
+import { ChecksStatusIcon, conflictsText, confirmLabel, publishBlocked, useChecksSummary, type ChecksSummary } from '../PageHeader'
+import { revealFile } from './DiffEntry'
+import { plural } from '../../diff/util'
+import { clampSidePanel, setSidePanelWidth, SIDE_PANEL, useSidePanelWidth } from '../../layout'
+
+/** A single check's status as the merge status icons show it. */
+const CHECK_STATUS: Record<CheckStatus, ChecksSummary['status']> = {
+  idle: 'idle',
+  cancelled: 'idle',
+  queued: 'pending',
+  running: 'pending',
+  success: 'success',
+  failure: 'failure',
+}
 
 const PANELS: Array<[Panel, string, typeof InfoIcon]> = [
   ['comments', 'Comments', CommentDiscussionIcon],
@@ -114,14 +126,9 @@ export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?
  */
 function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: (w: number) => void }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [, rerender] = useState(0)
-  useEffect(() => {
-    // The clamp depends on the window width.
-    const onResize = () => rerender((n) => n + 1)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-  const now = Math.round(clampSidePanel(width))
+  // The clamp depends on the window width.
+  const max = useSidePanelWidth((st) => st.max)
+  const now = Math.round(clampSidePanel(width, max))
   const preview = (w: number) => {
     const aside = ref.current?.closest<HTMLElement>('.SidePanel')
     aside?.style.setProperty('--side-panel-width', `${clampSidePanel(w)}px`)
@@ -136,7 +143,7 @@ function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: 
         tabIndex={0}
         aria-label="Draggable pane splitter"
         aria-valuemin={SIDE_PANEL.min}
-        aria-valuemax={sidePanelMax()}
+        aria-valuemax={max}
         aria-valuenow={now}
         aria-valuetext={`Pane width ${now} pixels`}
         onPointerDown={(e) => {
@@ -193,28 +200,22 @@ function OverviewPanel({
   const setPr = useStore((st) => st.setPr)
   if (editing)
     return (
-      <div className="OverviewPanel-edit">
-        <MarkdownEditor value={body} onChange={setBody} autoFocus rows={12} label="Pull request description" />
-        <div className="InlineComment-footer">
-          <Button
-            onClick={() => {
-              setBody(prBody)
-              setEditing(false)
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => {
-              setPr(null, body)
-              setEditing(false)
-            }}
-          >
-            Update description
-          </Button>
-        </div>
-      </div>
+      <EditForm
+        className="OverviewPanel-edit"
+        value={body}
+        onChange={setBody}
+        rows={12}
+        label="Pull request description"
+        saveLabel="Update description"
+        onCancel={() => {
+          setBody(prBody)
+          setEditing(false)
+        }}
+        onSave={() => {
+          setPr(null, body)
+          setEditing(false)
+        }}
+      />
     )
   return prBody.trim() ? (
     <Markdown source={prBody} className="OverviewPanel-body" />
@@ -229,7 +230,6 @@ function CommentsPanel() {
   const drafts = useStore((st) => st.drafts)
   const author = useStore((st) => st.snapshot?.author ?? 'you')
   const [filter, setFilter] = useState(1)
-  const shown = useMemo(() => drafts, [drafts])
   return (
     <div className="CommentsPanel">
       <div className="CommentsPanel-filters">
@@ -239,7 +239,7 @@ function CommentsPanel() {
           <SegmentedControl.Button selected={filter === 2}>Mine</SegmentedControl.Button>
         </SegmentedControl>
       </div>
-      {shown.length === 0 ? (
+      {drafts.length === 0 ? (
         <div className="CommentsPanel-empty">
           <CommentDiscussionIcon size={24} />
           <h3>No review comments yet</h3>
@@ -247,18 +247,14 @@ function CommentsPanel() {
         </div>
       ) : (
         <ul className="CommentsPanel-list">
-          {shown.map((c) => (
+          {drafts.map((c) => (
             <li key={c.id}>
               <button
                 type="button"
                 className="CommentsPanel-item"
                 onClick={() => {
                   useStore.getState().setTab('files')
-                  useStore.getState().toggleCollapsed(c.path, false)
-                  requestAnimationFrame(() => {
-                    const el = document.getElementById(`comment-${c.id}`) ?? document.getElementById(anchorFor(c.path))
-                    el?.scrollIntoView({ block: 'center' })
-                  })
+                  revealFile(c.path, `comment-${c.id}`)
                 }}
               >
                 <span className="CommentsPanel-path">
@@ -283,23 +279,24 @@ function CommentsPanel() {
 function MergePanel() {
   const s = useStore((st) => st.snapshot)!
   const transport = useStore((st) => st.transport)!
+  const native = transport.kind === 'native'
   const checks = useStore((st) => st.checks)
   const runAll = useStore((st) => st.runAllChecks)
   const setTab = useStore((st) => st.setTab)
   const openReview = useStore((st) => st.openReview)
   const range = useStore((st) => st.range)
   const existing = useStore((st) => st.existingPr)
+  const pr = useOpenPr()
   const findPr = useStore((st) => st.findPr)
   const confirmable = canConfirm({ transport, range })
   const summary = useChecksSummary()
   useEffect(() => {
     if (confirmable) void findPr()
   }, [confirmable, findPr])
-  const running = checks.some((c) => c.status === 'running' || c.status === 'queued')
-  const idle = checks.filter((c) => c.status === 'idle').length
+  const { running, idle } = summary
   const title =
     summary.status === 'none'
-      ? transport.capabilities.checks
+      ? native
         ? 'No local checks configured'
         : 'Local checks run in the native window'
       : summary.status === 'success'
@@ -316,11 +313,14 @@ function MergePanel() {
   ].filter(Boolean)
   const sub = summary.total
     ? `${parts.join(', ')} ${summary.total === 1 ? 'check' : 'checks'}`
-    : transport.capabilities.checks
+    : native
       ? 'Add a .gh-prv-local.toml to define checks.'
       : 'Open this preview with gh-prv-local to run them.'
   const conflicts = s.conflicts
-  const pr = existing?.pr ?? s.existingPr
+  const conflictsLine = conflictsText(
+    conflicts,
+    (files) => `Conflicting ${plural(files.length, 'file')}: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '…' : ''}`,
+  )
   return (
     <div className="MergePanel">
       <button type="button" className="MergePanel-row MergePanel-row--link" onClick={() => setTab('checks')}>
@@ -333,7 +333,7 @@ function MergePanel() {
         </span>
         <ChevronRightIcon size={16} className="MergePanel-chevron" />
       </button>
-      {summary.total > 0 && transport.capabilities.checks && summary.status !== 'success' && (
+      {summary.total > 0 && native && summary.status !== 'success' && (
         <div className="MergePanel-row MergePanel-row--actions">
           <Button size="small" disabled={running} onClick={() => void runAll()}>
             {running ? 'Running checks…' : 'Run all checks'}
@@ -351,33 +351,21 @@ function MergePanel() {
           )}
         </span>
         <span className="MergePanel-text">
-          <span className="MergePanel-title">
-            {conflicts == null
-              ? 'Merge status unknown'
-              : conflicts.length
-                ? 'This branch has conflicts that must be resolved'
-                : 'No conflicts with base branch'}
-          </span>
-          <span className="MergePanel-sub">
-            {conflicts == null
-              ? 'Conflicts could not be checked for this view.'
-              : conflicts.length
-                ? `Conflicting ${plural(conflicts.length, 'file')}: ${conflicts.slice(0, 5).join(', ')}${conflicts.length > 5 ? '…' : ''}`
-                : 'Merging can be performed automatically.'}
-          </span>
+          <span className="MergePanel-title">{conflictsLine.title}</span>
+          <span className="MergePanel-sub">{conflictsLine.sub}</span>
         </span>
       </div>
       <div className="MergePanel-actions">
         <Button variant="primary" disabled={!confirmable} onClick={() => openReview('CONFIRM')}>
-          {pr ? `Confirm and push to #${pr.number}` : 'Confirm and create pull request'}
+          {confirmLabel(pr)}
         </Button>
         <p className="MergePanel-note">
-          {!transport.capabilities.publish
+          {!native
             ? 'Publishing is available in the native window (`gh-prv-local`).'
             : range.from
               ? 'Switch back to all commits to confirm.'
               : existing?.error
-                ? `Publishing is blocked: ${existing.error.split('\n')[0]}`
+                ? publishBlocked(existing.error)
                 : `Confirm pushes ${s.head.name} and ${pr ? 'updates the open pull request' : `opens a pull request into ${s.base.name}`}.`}
         </p>
         <p className="MergePanel-note">
@@ -392,7 +380,7 @@ function MergePanel() {
         <ul className="MergePanel-checks">
           {checks.map((c) => (
             <li key={c.name}>
-              <ChecksStatusIcon status={c.status === 'cancelled' ? 'idle' : c.status === 'queued' || c.status === 'running' ? 'pending' : c.status === 'success' ? 'success' : c.status === 'failure' ? 'failure' : 'idle'} />
+              <ChecksStatusIcon status={CHECK_STATUS[c.status]} />
               <span>{c.name}</span>
             </li>
           ))}

@@ -26,10 +26,11 @@ import {
   TextInput,
 } from '@primer/react'
 import { KeybindingHint } from '@primer/react/experimental'
-import { canConfirm, useStore, viewKey } from '../../store'
+import { canConfirm, useOpenPr, useStore } from '../../store'
 import type { Commit, ReviewEvent } from '../../types'
-import { anchorFor, plural, shortDate, viewedKey } from '../../diff/util'
+import { commitAuthors, isViewed, plural, shortDate } from '../../diff/util'
 import { MarkdownEditor } from '../MarkdownEditor'
+import { publishBlocked, useChecksSummary } from '../PageHeader'
 import { toolbarOverflow, treeBesideNow, useContentWidthClass, useTreeBeside, useVisiblePanel } from '../../layout'
 
 /** Sticky toolbar above the diffs (new "Files changed" experience). */
@@ -95,7 +96,7 @@ export function ChangesToolbar() {
           />
           <Button
             size="small"
-            className="ChangesToolbar-panelToggle ChangesToolbar-comments"
+            className="ChangesToolbar-comments"
             leadingVisual={CommentDiscussionIcon}
             count={drafts}
             aria-label={panel === 'comments' ? 'Close comments panel' : 'Open comments panel'}
@@ -156,7 +157,7 @@ export function ChangesToolbar() {
 function ViewedProgress() {
   const files = useStore((st) => st.snapshot!.files)
   const viewed = useStore((st) => st.viewed)
-  const n = files.filter((f) => viewed[f.path] === viewedKey(f)).length
+  const n = files.filter((f) => isViewed(viewed, f)).length
   const total = files.length
   const r = 6
   const c = 2 * Math.PI * r
@@ -292,8 +293,8 @@ export function useShortcuts() {
 
 /* ---------------- Commit picker ---------------- */
 
-function commitLine(c: Commit) {
-  const who = [c.author, ...c.coAuthors.filter((n) => n !== c.author)]
+export function commitLine(c: Commit) {
+  const who = commitAuthors(c)
   return `${who.length > 1 ? `${who[0]} and ${who.length === 2 ? who[1] : `${who.length - 1} others`}` : who[0]} committed on ${shortDate(c.committerDate || c.date)}`
 }
 
@@ -301,7 +302,7 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
   const s = useStore((st) => st.snapshot)!
   const range = useStore((st) => st.range)
   const lastReview = useStore((st) => st.lastReview)
-  const transport = useStore((st) => st.transport)!
+  const canRange = useStore((st) => st.transport?.kind === 'native')
   const reload = useStore((st) => st.reload)
   const commits = s.commits
   const idx = (sha?: string | null) => (sha ? commits.findIndex((c) => c.sha === sha) : -1)
@@ -309,7 +310,6 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
   const [mode, setMode] = useState<'all' | 'since' | 'range'>('all')
   const sinceIndex = lastReview ? idx(lastReview.head) : -1
   const sinceAvailable = sinceIndex >= 0 && sinceIndex < commits.length - 1
-  const canRange = transport.capabilities.ranges
 
   useEffect(() => {
     if (!open) return
@@ -423,8 +423,6 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
   )
 }
 
-export { commitLine }
-
 /* ---------------- Submit review ---------------- */
 
 function ReviewButton() {
@@ -461,13 +459,14 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
   const s = useStore((st) => st.snapshot)!
   const transport = useStore((st) => st.transport)!
   const drafts = useStore((st) => st.drafts)
-  const checks = useStore((st) => st.checks)
+  const checks = useChecksSummary()
   const prTitle = useStore((st) => st.prTitle)
   const prBody = useStore((st) => st.prBody)
   const setPr = useStore((st) => st.setPr)
   const submit = useStore((st) => st.submit)
   const busy = useStore((st) => st.busy)
   const existing = useStore((st) => st.existingPr)
+  const pr = useOpenPr()
   const findPr = useStore((st) => st.findPr)
   const range = useStore((st) => st.range)
   const { body, event, draft, error } = useStore((st) => st.reviewDraft)
@@ -476,11 +475,8 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
   const setEvent = (v: ReviewEvent) => setReviewDraft({ event: v })
   const setDraft = (v: boolean) => setReviewDraft({ draft: v })
   const setError = (v: string | null) => setReviewDraft({ error: v })
-  const canPublish = transport.capabilities.publish
+  const canPublish = transport.kind === 'native'
   const confirmable = canConfirm({ transport, range })
-  const failed = checks.filter((c) => c.status === 'failure')
-  const notRun = checks.filter((c) => c.status === 'idle')
-  const pr = existing?.pr ?? s.existingPr
   const blocked =
     !!busy || (event === 'CONFIRM' && (!confirmable || !!existing?.loading || !!existing?.error))
 
@@ -545,7 +541,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
               {existing?.loading && <div className="fgColor-muted">Checking for an open pull request…</div>}
               {existing?.error && (
                 <Flash variant="danger">
-                  <span style={{ whiteSpace: 'pre-wrap' }}>Publishing is blocked: {existing.error.split('\n')[0]}</span>{' '}
+                  <span style={{ whiteSpace: 'pre-wrap' }}>{publishBlocked(existing.error)}</span>{' '}
                   <Button size="small" onClick={() => void findPr()}>
                     Retry
                   </Button>
@@ -562,9 +558,9 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
                   <AlertIcon size={16} /> You have uncommitted changes. Only committed changes are pushed.
                 </Flash>
               )}
-              {checks.length > 0 && (failed.length > 0 || notRun.length > 0) && (
+              {checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && (
                 <Flash variant="warning">
-                  {failed.length > 0 ? `${plural(failed.length, 'check')} failed.` : `${plural(notRun.length, 'check')} not run yet.`} See
+                  {checks.failed > 0 ? `${plural(checks.failed, 'check')} failed.` : `${plural(checks.idle, 'check')} not run yet.`} See
                   Merge status.
                 </Flash>
               )}
@@ -605,15 +601,4 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   )
-}
-
-export function scrollToFile(path: string) {
-  const el = document.getElementById(anchorFor(path))
-  if (!el) return
-  const y = el.getBoundingClientRect().top + window.scrollY - 60
-  window.scrollTo({ top: y })
-}
-
-export function viewLabel(range: { from?: string | null; to?: string | null }) {
-  return viewKey(range)
 }

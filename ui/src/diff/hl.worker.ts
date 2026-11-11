@@ -4,8 +4,9 @@
 
 import { createStarryNight, common } from '@wooorm/starry-night'
 import onigUrl from 'vscode-oniguruma/release/onig.wasm?url'
+import type { Run } from './highlight'
+import { stripCr } from './parse'
 
-type Run = [string, string]
 interface Req {
   id: number
   content: string
@@ -45,7 +46,6 @@ const EXT_ALIASES: Record<string, string> = {
   '.bash': '.sh',
   '.properties': '.ini',
   '.toml': '.ini',
-  '.xml': '.xml',
   '.svg': '.xml',
 }
 
@@ -74,7 +74,7 @@ function flatten(tree: HastNode): Run[][] {
       const parts = (node.value ?? '').split('\n')
       parts.forEach((p, i) => {
         if (i > 0) lines.push([])
-        if (p) lines[lines.length - 1].push([p.endsWith('\r') ? p.slice(0, -1) : p, cls])
+        if (p) lines[lines.length - 1].push([stripCr(p), cls])
       })
       return
     }

@@ -141,13 +141,11 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::TempDir;
 
-    fn dir(files: &[(&str, &str)]) -> std::path::PathBuf {
-        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let d = std::env::temp_dir().join(format!("gh-prv-local-checks-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join(".github")).unwrap();
+    fn dir(files: &[(&str, &str)]) -> TempDir {
+        let d = TempDir::new();
+        std::fs::create_dir(d.join(".github")).unwrap();
         for (name, text) in files {
             std::fs::write(d.join(name), text).unwrap();
         }
@@ -163,8 +161,5 @@ mod tests {
         // The repository root wins over .github/.
         let d2 = dir(&[(".github/gh-prv-local.toml", &one("github")), (".gh-prv-local.toml", &one("root"))]);
         assert_eq!(discover(&d2).unwrap()[0].name, "root");
-        for d in [d, d2] {
-            let _ = std::fs::remove_dir_all(d);
-        }
     }
 }

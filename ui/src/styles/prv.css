@@ -20,6 +20,8 @@ html {
  * installed fonts decide: on a Mac the system font and, for code, Menlo.
  */
 :root {
+  /* The sticky Files changed toolbar; file headers stick right below it. */
+  --toolbar-height: 60px;
   /* github.com's monospace stack, newer than the one in @primer/primitives 11.10. */
   --fontStack-monospace: 'Monaspace Neon', ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
@@ -144,7 +146,10 @@ h3 {
   min-width: 0;
 }
 .AppHeader-context-item {
+  min-width: 0;
   padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .AppHeader-context-sep {
@@ -177,12 +182,13 @@ h3 {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
 }
-/* github.com: the header runs up to the panel, the toolbar and diffs stop 16px before it. */
+/* github.com: the header runs up to the panel, the toolbar and diffs stop 16px before it (the panel
+   is docked on the Files changed tab only). */
 .App-body.has-panel .App-main {
   padding-right: 0;
 }
-.App-body.has-panel .PullPage--files .ChangesToolbar,
-.App-body.has-panel .PullPage--files .ChangesContent {
+.App-body.has-panel .ChangesToolbar,
+.App-body.has-panel .ChangesContent {
   margin-right: 16px;
 }
 .App-main {
@@ -221,9 +227,6 @@ h3 {
   font-size: 32px;
   font-weight: 400;
   line-height: 40px;
-}
-.PullHeader-titleText {
-  font-weight: 400;
 }
 .PullHeader-titleSuffix {
   display: inline-flex;
@@ -272,11 +275,11 @@ h3 {
   min-width: 0;
   min-height: 28px;
   padding-left: 2px;
+  overflow: hidden;
   color: var(--fgColor-muted);
 }
 .PullHeader-author {
   font-weight: 600;
-  color: var(--fgColor-muted);
 }
 .PullHeader-branches {
   display: flex;
@@ -284,16 +287,21 @@ h3 {
   gap: 4px;
   min-width: 0;
 }
-.PullHeader-branches [data-component='BranchName'],
 .PullHeader-branches > span:not(:only-child) {
+  white-space: nowrap;
+}
+/* Branch names: at most 35% of the window, then truncated (github.com). */
+.PullHeader-branches [data-component='BranchName'] {
+  display: block;
+  max-width: 35vw;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fgColor-accent);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .PullHeader .PullHeader-navigation {
   padding-top: 16px;
-}
-.PullHeader-branches [data-component='BranchName'],
-.PullHeader-branches .prc-BranchName-BranchName {
-  color: var(--fgColor-accent);
 }
 
 /* ---------- Tabs ---------- */
@@ -323,7 +331,6 @@ h3 {
   text-decoration: none;
 }
 .TabNav-link:hover {
-  color: var(--fgColor-default);
   text-decoration: none;
 }
 .TabNav-link.selected {
@@ -345,7 +352,8 @@ h3 {
   right: 0;
   padding-top: 12px;
 }
-.DiffStat {
+.DiffStat,
+.DiffFileHeader-stat {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -401,7 +409,7 @@ h3 {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  height: 60px;
+  height: var(--toolbar-height);
   padding: 16px 0;
   box-sizing: border-box;
   background-color: var(--bgColor-default);
@@ -426,7 +434,6 @@ h3 {
   display: flex;
   gap: 4px;
 }
-.ChangesToolbar-panelToggle[aria-expanded='true'],
 .ChangesToolbar-panels [aria-expanded='true'] {
   background-color: var(--button-default-bgColor-active);
 }
@@ -496,24 +503,12 @@ h3 {
   flex-direction: column;
   gap: 16px;
 }
-.DiffList-empty {
-  padding: 32px;
-  text-align: center;
-  color: var(--fgColor-muted);
-  border: var(--borderWidth-thin) solid var(--borderColor-default);
-  border-radius: var(--borderRadius-medium);
-}
-.DiffList-empty h3 {
-  font-size: 20px;
-  color: var(--fgColor-default);
-  margin-bottom: 4px;
-}
 .DiffEntry {
-  scroll-margin-top: 60px;
+  scroll-margin-top: var(--toolbar-height);
 }
 .DiffEntry-headerWrapper {
   position: sticky;
-  top: 58px;
+  top: calc(var(--toolbar-height) - 2px);
   z-index: 5;
   background-color: var(--bgColor-default);
   border-top-left-radius: var(--borderRadius-medium);
@@ -574,9 +569,6 @@ h3 {
   font-size: 12px;
   line-height: 18px;
 }
-.DiffFileHeader-name a:hover {
-  text-decoration: underline;
-}
 .DiffFileHeader-copy {
   flex-shrink: 0;
   margin-left: 8px;
@@ -596,11 +588,6 @@ h3 {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-}
-.DiffFileHeader-stat {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 .DiffFileHeader-binary {
   font-size: 12px;
@@ -652,7 +639,8 @@ h3 {
   --diff-line-height: 20px;
   --diff-line-minimum-height: 20px;
 }
-.DiffTable td {
+/* Zero specificity beyond .DiffTable, so the cell classes below set their own padding. */
+.DiffTable :where(td) {
   padding: 0;
 }
 .diff-line-row {
@@ -689,7 +677,7 @@ h3 {
 }
 .diff-text-cell {
   position: relative;
-  padding: 0 24px 0 var(--diff-line-height) !important;
+  padding: 0 24px 0 var(--diff-line-height);
   vertical-align: top;
 }
 .diff-text-cell[data-selected='true'] {
@@ -744,23 +732,19 @@ h3 {
 }
 .diff-hunk-cell {
   position: relative;
-  padding: 0 var(--diff-line-height) !important;
+  padding: 0 var(--diff-line-height);
   user-select: none;
 }
 .diff-hunk-row {
   display: flex;
-  flex-direction: row;
 }
 .diff-text-cell.hunk {
   display: flex;
   align-items: center;
   min-width: 0; /* long function context wraps instead of widening narrow windows */
-  padding: 0 20px !important;
+  padding: 0 20px;
   font-size: 12px;
   line-height: 20px;
-}
-.diff-text-cell.hunk .diff-text-inner {
-  color: var(--fgColor-muted);
 }
 .expand-button-line {
   display: flex;
@@ -810,10 +794,6 @@ h3 {
 .hunk-kebab-icon.hunk-kebab-icon-unified {
   width: 88px;
 }
-.diff-line-row:last-child .diff-hunk-cell {
-  border-bottom-left-radius: 5px;
-  border-bottom-right-radius: 5px;
-}
 .DiffTable tr:last-child > td:first-child {
   border-bottom-left-radius: 5px;
 }
@@ -853,7 +833,7 @@ h3 {
 
 /* ---------- Comments ---------- */
 .diff-comment-cell {
-  padding: 8px !important;
+  padding: 8px;
 }
 .DiffComments {
   display: flex;
@@ -869,11 +849,17 @@ h3 {
   padding: 8px;
   border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
 }
-.InlineComment {
-  padding: 8px;
+/* The bordered boxes: comment form, review thread, comment editor, conversation comment. */
+.InlineComment,
+.ReviewThread,
+.MarkdownEditor-box,
+.TimelineComment-box {
   background-color: var(--bgColor-default);
   border: var(--borderWidth-thin) solid var(--borderColor-default);
   border-radius: var(--borderRadius-medium);
+}
+.InlineComment {
+  padding: 8px;
 }
 .InlineComment-header {
   display: flex;
@@ -889,11 +875,6 @@ h3 {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
-}
-.ReviewThread {
-  background-color: var(--bgColor-default);
-  border: var(--borderWidth-thin) solid var(--borderColor-default);
-  border-radius: var(--borderRadius-medium);
 }
 .ReviewComment {
   padding: 8px 16px 16px;
@@ -944,11 +925,6 @@ h3 {
 }
 
 /* ---------- Markdown editor (comment box) ---------- */
-.MarkdownEditor-box {
-  background-color: var(--bgColor-default);
-  border: var(--borderWidth-thin) solid var(--borderColor-default);
-  border-radius: var(--borderRadius-medium);
-}
 .MarkdownEditor-header {
   display: flex;
   align-items: center;
@@ -1350,11 +1326,6 @@ h3 {
   top: 0;
   left: -56px;
 }
-.TimelineComment-box {
-  background-color: var(--bgColor-default);
-  border: var(--borderWidth-thin) solid var(--borderColor-default);
-  border-radius: var(--borderRadius-medium);
-}
 .TimelineComment-header {
   display: flex;
   align-items: center;
@@ -1692,8 +1663,12 @@ h3 {
   border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
 }
 .Checks-headerTitle {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
   color: var(--fgColor-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .Checks-headerSha {
   font-size: 12px;
@@ -1790,17 +1765,23 @@ h3 {
   overflow-wrap: anywhere;
 }
 
-.Blankslate-box {
+/* Empty states: a tab with nothing to show, or no file matching the filters. */
+.Blankslate-box,
+.DiffList-empty {
   padding: 32px;
   text-align: center;
   color: var(--fgColor-muted);
   border: var(--borderWidth-thin) solid var(--borderColor-default);
   border-radius: var(--borderRadius-medium);
 }
-.Blankslate-box h3 {
+.Blankslate-box h3,
+.DiffList-empty h3 {
   margin-bottom: 8px;
   font-size: 20px;
   color: var(--fgColor-default);
+}
+.DiffList-empty h3 {
+  margin-bottom: 4px;
 }
 .Blankslate-note {
   font-size: 12px;
@@ -2015,32 +1996,6 @@ a.BlockedImage:hover {
     display: none;
   }
 }
-@media (min-width: 1012px) {
-  .PullHeader-summary {
-    flex-wrap: nowrap;
-    white-space: nowrap;
-  }
-}
-@media (max-width: 543.98px) {
-  .PullHeader-meta {
-    flex-direction: column;
-  }
-  .TabNav-icon {
-    display: none;
-  }
-}
-.PullHeader-summary {
-  overflow: hidden;
-}
-/* Branch names: at most 35% of the window, then truncated (github.com). */
-.PullHeader-branches [data-component='BranchName'] {
-  display: block;
-  max-width: 35vw;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* Toolbar: its own container. Below 768px the labels shorten, at 544px controls move into the
    overflow menu (Toolbar.tsx renders the menu at the same widths), at 500px the progress goes. */
@@ -2075,14 +2030,50 @@ a.BlockedImage:hover {
     display: none;
   }
 }
+
+/* File tree as a dialog (windows under 1076px): Primer Dialog body provides the 16px padding. */
+.FileTree--dialog {
+  padding-top: 0;
+}
+.FileTree--dialog .FileTree-header {
+  padding: 0 0 16px;
+}
+.FileTree--dialog .FileTree-scrollable {
+  padding: 0;
+  overflow: visible;
+}
+
+/* Conversation and Commits: shown only in narrow windows (below). */
+.TimelineComment-headerAvatar,
+.CommitRow-menu {
+  display: none;
+}
+
+/* Window widths, widest first: where ranges overlap, the narrower one comes later and wins. */
+@media (min-width: 1012px) {
+  .PullHeader-summary {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+}
+/* "3 / 5" without "viewed", the conversation sidebar 256px, the checks header title at most 150px. */
 @media (max-width: 1011.98px) {
   .ViewedProgress-label {
     display: none;
+  }
+  .Conversation {
+    grid-template-columns: minmax(0, 1fr) 256px;
+  }
+  .Checks-headerTitle {
+    max-width: 150px;
   }
 }
 
 /* Primer's narrow range (< 768px). */
 @media (max-width: calc(48rem - 0.02px)) {
+  .AppHeader-right {
+    display: none;
+  }
   /* Primer stacks the layout content in a column here; the toolbar keeps its own height. */
   .ChangesToolbar {
     flex: none;
@@ -2111,43 +2102,11 @@ a.BlockedImage:hover {
     flex: 1;
     max-height: none;
   }
-  .AppHeader-right {
-    display: none;
-  }
-}
-.AppHeader-context-item {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* File tree as a dialog (windows under 1076px): Primer Dialog body provides the 16px padding. */
-.FileTree--dialog {
-  padding-top: 0;
-}
-.FileTree--dialog .FileTree-header {
-  padding: 0 0 16px;
-}
-.FileTree--dialog .FileTree-scrollable {
-  padding: 0;
-  overflow: visible;
-}
-
-/* Conversation, Commits and Checks tabs. */
-.TimelineComment-headerAvatar,
-.CommitRow-menu {
-  display: none;
-}
-@media (max-width: 1011.98px) {
-  .Conversation {
-    grid-template-columns: minmax(0, 1fr) 256px;
-  }
-}
-@media (max-width: calc(48rem - 0.02px)) {
+  /* Conversation: the sidebar goes below the timeline. The avatar column goes; the author's avatar
+     moves into the comment header. */
   .Conversation {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* The avatar column goes; the author's avatar moves into the comment header. */
   .TimelineComment,
   .TimelineItem {
     margin-left: 0;
@@ -2162,6 +2121,7 @@ a.BlockedImage:hover {
     vertical-align: middle;
   }
 }
+/* Checks: the list goes above the log. */
 @media (max-width: 768px) {
   .Checks-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -2172,6 +2132,12 @@ a.BlockedImage:hover {
   }
 }
 @media (max-width: 543.98px) {
+  .PullHeader-meta {
+    flex-direction: column;
+  }
+  .TabNav-icon {
+    display: none;
+  }
   .CommitRow .CommitRow-actions {
     display: none;
   }
@@ -2187,16 +2153,5 @@ a.BlockedImage:hover {
   }
   .Commits-list {
     margin-left: -40px;
-  }
-}
-.Checks-headerTitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-@media (max-width: 1011.98px) {
-  .Checks-headerTitle {
-    max-width: 150px;
   }
 }

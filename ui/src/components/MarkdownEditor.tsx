@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   BoldIcon,
   CodeIcon,
@@ -13,7 +13,7 @@ import {
   QuoteIcon,
   TasklistIcon,
 } from '@primer/octicons-react'
-import { Textarea } from '@primer/react'
+import { Button, Textarea } from '@primer/react'
 import { ActionBar } from '@primer/react/experimental'
 import { Markdown } from './common'
 
@@ -55,7 +55,6 @@ export function MarkdownEditor({
   rows = 5,
   label = 'Markdown value',
   suggestion,
-  footer,
 }: {
   value: string
   onChange: (v: string) => void
@@ -67,7 +66,6 @@ export function MarkdownEditor({
   label?: string
   /** Lines to prefill a ```suggestion block with (inline comments only). */
   suggestion?: string[]
-  footer?: ReactNode
 }) {
   const [mode, setMode] = useState<'write' | 'preview'>('write')
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -185,7 +183,42 @@ export function MarkdownEditor({
             {value.trim() ? <Markdown source={value} /> : <span className="fgColor-muted">Nothing to preview</span>}
           </div>
         )}
-        {footer}
+      </div>
+    </div>
+  )
+}
+
+/** Editing an existing text (description, comment): the comment box, then Cancel and the save button. */
+export function EditForm({
+  className,
+  value,
+  onChange,
+  rows,
+  label,
+  saveLabel,
+  disabled,
+  onCancel,
+  onSave,
+}: {
+  className?: string
+  value: string
+  onChange: (v: string) => void
+  rows?: number
+  label: string
+  saveLabel: string
+  /** The save button is disabled. */
+  disabled?: boolean
+  onCancel: () => void
+  onSave: () => void
+}) {
+  return (
+    <div className={className}>
+      <MarkdownEditor value={value} onChange={onChange} autoFocus rows={rows} label={label} />
+      <div className="InlineComment-footer">
+        <Button onClick={onCancel}>Cancel</Button>
+        <Button variant="primary" disabled={disabled} onClick={onSave}>
+          {saveLabel}
+        </Button>
       </div>
     </div>
   )

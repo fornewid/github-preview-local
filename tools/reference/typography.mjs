@@ -8,9 +8,7 @@
 //   node typography.mjs <PR url> <path/to/preview.html> [--width 1440] [--tabs files,commits,checks,conversation]
 //
 // Read only: github.com is only loaded, nothing is clicked.
-import { chromium } from 'playwright-core'
-import os from 'node:os'
-import path from 'node:path'
+import { exportUrl, gotoGithub, openChrome, openGithub, prBase } from './common.mjs'
 
 const args = process.argv.slice(2)
 const opt = (name, def) => {
@@ -31,12 +29,8 @@ if (unknown.length) {
   process.exit(2)
 }
 
-const opts = { channel: 'chrome', headless: true, viewport: { width, height: 900 }, colorScheme: 'light', locale: 'en-US' }
-const gh = await chromium.launchPersistentContext(path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile'), {
-  ...opts,
-  ignoreDefaultArgs: ['--use-mock-keychain'],
-})
-const local = await (await chromium.launch(opts)).newContext(opts)
+const gh = await openGithub({ width, scheme: 'light' })
+const local = await openChrome({ width, scheme: 'light' })
 
 // Every visible element with its own text: the text, its computed text styles and its box.
 function collect() {
@@ -113,9 +107,8 @@ async function platformFonts(page, runs) {
 }
 
 async function githubPage(tab) {
-  const page = gh.pages()[0] ?? (await gh.newPage())
-  await page.goto(pr + ghPath[tab], { waitUntil: 'domcontentloaded', timeout: 90000 })
-  await page.waitForTimeout(tab === 'files' ? 6000 : 4000)
+  const { page } = gh
+  await gotoGithub(page, prBase(pr) + ghPath[tab], { selector: null, wait: tab === 'files' ? 6000 : 4000 })
   const state = await page.evaluate(() => ({
     login: document.querySelector('meta[name="user-login"]')?.getAttribute('content'),
     background: getComputedStyle(document.body).backgroundColor,
@@ -129,8 +122,8 @@ async function githubPage(tab) {
 }
 
 async function prvPage(tab) {
-  const page = local.pages()[0] ?? (await local.newPage())
-  await page.goto('file://' + path.resolve(file), { waitUntil: 'load' })
+  const { page } = local
+  await page.goto(exportUrl(file), { waitUntil: 'load' })
   await page.waitForTimeout(1500)
   await page.evaluate((t) => window.__prv.getState().setTab(t), tab)
   await page.waitForTimeout(1000)
@@ -199,6 +192,6 @@ for (const tab of tabs) {
   total += diffs.length + iconDiffs.length
 }
 console.log(`\n${total} differences`)
-await gh.close()
-await local.browser().close()
+await gh.ctx.close()
+await local.browser.close()
 process.exit(0)

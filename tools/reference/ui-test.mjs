@@ -4,27 +4,17 @@
 // to 2560px (file tree and side panel dialogs, side panel width, overflow menu, compact headers).
 //
 //   node ui-test.mjs <preview.html>
-import { chromium } from 'playwright-core'
-import path from 'node:path'
+import { exportUrl, openChrome, openExport } from './common.mjs'
 
 const file = process.argv[2]
-const browser = await chromium.launch({ channel: 'chrome', headless: true })
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
-const page = await ctx.newPage()
+const { browser, ctx, page } = await openChrome()
 // gh-prv-local loads nothing from any host: every request must stay inside the file.
 const external = []
 ctx.on('request', (r) => /^(file|data|blob):/.test(r.url()) || external.push(r.url()))
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
-const url = 'file://' + path.resolve(file) + '?diff=split'
-await page.goto(url, { waitUntil: 'load' })
-await page.evaluate(() => {
-  localStorage.clear()
-  localStorage.setItem('prv:settings', JSON.stringify({ diffView: 'split', compact: true, treeVisible: false }))
-})
-await page.goto(url, { waitUntil: 'load' })
-await page.waitForTimeout(2000)
+await openExport(page, file, { query: '?diff=split', settings: { treeVisible: false } })
 
 let failed = 0
 const results = []
@@ -268,13 +258,7 @@ await check('submit a review: request changes with both comments', async () => {
 })
 
 // ---------------- Widths (github.com's responsive behaviour, docs/reference.md) ----------------
-await page.goto(url, { waitUntil: 'load' })
-await page.evaluate(() => {
-  localStorage.clear()
-  localStorage.setItem('prv:settings', JSON.stringify({ diffView: 'split', compact: true, treeVisible: true }))
-})
-await page.goto(url, { waitUntil: 'load' })
-await page.waitForTimeout(1500)
+await openExport(page, file, { query: '?diff=split', settings: { treeVisible: true }, wait: 1500 })
 const width = async (w) => {
   await page.setViewportSize({ width: w, height: 900 })
   await page.evaluate(() => window.scrollTo(0, 0))
@@ -430,7 +414,7 @@ await check('native views (fake bridge): checks list beside the log, stacked at 
   await native.addInitScript({ path: new URL('./fake-native.js', import.meta.url).pathname })
   const p = await native.newPage()
   p.on('pageerror', (e) => errors.push(e.message))
-  await p.goto('file://' + path.resolve(file), { waitUntil: 'load' })
+  await p.goto(exportUrl(file), { waitUntil: 'load' })
   await p.waitForTimeout(1500)
   await p.getByRole('link', { name: /^Checks/ }).click()
   await p.waitForTimeout(500)

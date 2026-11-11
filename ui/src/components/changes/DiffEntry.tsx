@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -15,7 +15,8 @@ import {
 } from '@primer/octicons-react'
 import { ActionList, ActionMenu, Button, IconButton, Label, Tooltip } from '@primer/react'
 import { useShallow } from 'zustand/react/shallow'
-import { MEDIA, useMediaQuery } from '../../layout'
+import { useMediaQuery } from '../../layout'
+import { MEDIA } from '../../media'
 import { useStore, viewKey, type CommentTarget } from '../../store'
 import { parseHunks, splitLines, type DiffLine } from '../../diff/parse'
 import {
@@ -33,12 +34,28 @@ import {
 } from '../../diff/model'
 import type { HlLines, Run } from '../../diff/highlight'
 import type { Range } from '../../diff/word'
-import { anchorFor, codeownersFor, ownersLabel, tabSizeFor, viewedKey } from '../../diff/util'
+import { anchorFor, codeownersFor, contentKey, isViewed, ownersLabel, tabSizeFor } from '../../diff/util'
 import type { FileDiff, ReviewComment, Side } from '../../types'
 import { Avatar, CopyButton, DiffSquares, Markdown, copyText } from '../common'
-import { MarkdownEditor } from '../MarkdownEditor'
+import { EditForm, MarkdownEditor } from '../MarkdownEditor'
 
 const LARGE_DIFF_LINES = 1500
+
+/** No expanded context (one object, so memoized rows stay valid). */
+const NO_GAPS: Readonly<Record<number, GapState>> = Object.freeze({})
+
+/**
+ * Opens a file's diff and scrolls it to the top, under the sticky toolbar (`scroll-margin-top`),
+ * or centers an element in it (`anchorId`, e.g. a comment). After the next frame, so a dialog
+ * that just closed or a tab that just changed is out of the way.
+ */
+export function revealFile(path: string, anchorId?: string) {
+  useStore.getState().toggleCollapsed(path, false)
+  requestAnimationFrame(() => {
+    const el = (anchorId && document.getElementById(anchorId)) || document.getElementById(anchorFor(path))
+    el?.scrollIntoView(anchorId ? { block: 'center' } : undefined)
+  })
+}
 
 export function DiffList({ files }: { files: FileDiff[] }) {
   if (!files.length)
@@ -89,18 +106,18 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
     useShallow((st) => ({ hideWhitespace: st.settings.hideWhitespace, compact: st.settings.compact, diffView: st.settings.diffView })),
   )
   const ui = useStore((st) => st.fileUI[file.path])
-  const isViewed = useStore((st) => st.viewed[file.path] === viewedKey(file))
+  const viewed = useStore((st) => isViewed(st.viewed, file))
   const editorconfig = useStore((st) => st.snapshot?.editorconfig)
   const codeowners = useStore((st) => st.snapshot?.codeowners?.[1])
   const fileComposing = useStore((st) => st.composing?.path === file.path && st.composing.line === 0)
-  const oldKey = `old:${file.oldPath ?? file.path}`
-  const newKey = `new:${file.path}`
+  const oldKey = contentKey(file, 'old')
+  const newKey = contentKey(file, 'new')
   const oldText = useStore((st) => st.contents[oldKey])
   const newText = useStore((st) => st.contents[newKey])
   const hlOld = useStore((st) => st.hl[oldKey])
   const hlNew = useStore((st) => st.hl[newKey])
   const { toggleCollapsed, toggleViewed, ensureContents, setGaps, compose } = useStore.getState()
-  const collapsed = ui?.collapsed ?? isViewed
+  const collapsed = ui?.collapsed ?? viewed
 
   useEffect(() => {
     const el = ref.current
@@ -128,9 +145,10 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   const newTotal = file.status === 'deleted' ? 0 : newLines ? newLines.length : null
   const loaded = file.status === 'deleted' ? oldLines != null : newLines != null
   const gaps = useMemo(() => computeGaps(hunks, newTotal, loaded), [hunks, newTotal, loaded])
-  const gapState = (ws ? ui?.gapsW : ui?.gaps) ?? {}
+  const gapState = (ws ? ui?.gapsW : ui?.gaps) ?? NO_GAPS
   const expandable = gaps.some((g) => g.size > 0)
   const anyExpanded = Object.values(gapState).some((g) => g.top + g.bottom > 0)
+  const toggleExpandAll = () => setGaps(file.path, anyExpanded ? undefined : expandAll(gaps), ws)
   const patchLines = useMemo(() => hunks.reduce((a, h) => a + h.lines.length, 0), [hunks])
   const tabSize = tabSizeFor(editorconfig, file.path)
   // Computed once the file comes near the viewport (CODEOWNERS can have thousands of rules).
@@ -156,14 +174,7 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   else if (file.binary) body = <Placeholder>Binary file not shown.</Placeholder>
   else if (file.tooLarge) body = <Placeholder>Large diffs are not rendered by default.</Placeholder>
   else if (file.generated && !forceLoad)
-    body = (
-      <Placeholder>
-        <Button variant="link" onClick={() => setForceLoad(true)}>
-          Load diff
-        </Button>
-        <div className="DiffPlaceholder-note">Some generated files are not rendered by default.</div>
-      </Placeholder>
-    )
+    body = <LoadDiff note="Some generated files are not rendered by default." onLoad={() => setForceLoad(true)} />
   else if (!hunks.length)
     body = (
       <Placeholder>
@@ -179,14 +190,7 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
       </Placeholder>
     )
   else if (patchLines > LARGE_DIFF_LINES && !forceLoad)
-    body = (
-      <Placeholder>
-        <Button variant="link" onClick={() => setForceLoad(true)}>
-          Load diff
-        </Button>
-        <div className="DiffPlaceholder-note">Large diffs are not rendered by default.</div>
-      </Placeholder>
-    )
+    body = <LoadDiff note="Large diffs are not rendered by default." onLoad={() => setForceLoad(true)} />
   else if (!visible) body = <div style={{ height: (patchLines + hunks.length) * lineHeight }} />
   else
     body = (
@@ -248,7 +252,7 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
                 className="DiffFileHeader-expandAll"
                 icon={anyExpanded ? FoldIcon : UnfoldIcon}
                 aria-label={anyExpanded ? `Collapse expanded lines: ${file.path}` : `Expand all lines: ${file.path}`}
-                onClick={() => setGaps(file.path, anyExpanded ? undefined : expandAll(gaps), ws)}
+                onClick={toggleExpandAll}
               />
             )}
             {modeChanged && (
@@ -275,10 +279,10 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
             <div className="DiffFileHeader-actions">
               <Button
                 size="small"
-                className={`DiffFileHeader-viewed ${isViewed ? 'is-viewed' : ''}`}
-                leadingVisual={() => <ViewedBox checked={isViewed} />}
-                aria-label={isViewed ? 'Viewed' : 'Not Viewed'}
-                aria-pressed={isViewed}
+                className={`DiffFileHeader-viewed ${viewed ? 'is-viewed' : ''}`}
+                leadingVisual={() => <ViewedBox checked={viewed} />}
+                aria-label={viewed ? 'Viewed' : 'Not Viewed'}
+                aria-pressed={viewed}
                 onClick={() => toggleViewed(file)}
               >
                 Viewed
@@ -297,10 +301,7 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
                 onComment={commentOnFile}
                 expand={
                   expandable && loaded && !collapsed
-                    ? {
-                        label: anyExpanded ? 'Collapse expanded lines' : 'Expand all lines',
-                        run: () => setGaps(file.path, anyExpanded ? undefined : expandAll(gaps), ws),
-                      }
+                    ? { label: anyExpanded ? 'Collapse expanded lines' : 'Expand all lines', run: toggleExpandAll }
                     : null
                 }
               />
@@ -309,7 +310,7 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
         </div>
       </div>
       {!collapsed && (
-        <div className="DiffEntry-body" style={{ ['--diff-line-height' as string]: `${lineHeight}px` } as CSSProperties}>
+        <div className="DiffEntry-body">
           <FileComments file={file} composing={fileComposing} />
           {body}
         </div>
@@ -322,10 +323,17 @@ function Placeholder({ children }: { children: ReactNode }) {
   return <div className="DiffPlaceholder">{children}</div>
 }
 
-/**
- * File kebab menu. Below 768px github.com hides the header's comment, copy and expand buttons,
- * stats and CODEOWNERS shield, and offers them here instead.
- */
+function LoadDiff({ note, onLoad }: { note: string; onLoad: () => void }) {
+  return (
+    <Placeholder>
+      <Button variant="link" onClick={onLoad}>
+        Load diff
+      </Button>
+      <div className="DiffPlaceholder-note">{note}</div>
+    </Placeholder>
+  )
+}
+
 type FileMenuProps = {
   file: FileDiff
   owners: string | null
@@ -391,7 +399,7 @@ function nest(text: string, cls: string, x?: string): ReactNode {
   return node
 }
 
-function LineContent({ text, runs, words }: { text: string; runs?: Run[]; words?: Range[] | null }) {
+const LineContent = memo(function LineContent({ text, runs, words }: { text: string; runs?: Run[]; words?: Range[] | null }) {
   if (text === '') return <br />
   const base: Run[] = runs && runs.reduce((a, r) => a + r[0], '') === text ? runs : [[text, '']]
   if (!words?.length) return <>{base.map(([t, c], i) => <span key={i}>{nest(t, c)}</span>)}</>
@@ -416,7 +424,7 @@ function LineContent({ text, runs, words }: { text: string; runs?: Run[]; words?
     pos += t.length
   }
   return <>{out}</>
-}
+})
 
 interface TableProps {
   file: FileDiff
@@ -517,20 +525,18 @@ function DiffTable(p: TableProps) {
     )
   }
 
-  const numCell = (line: DiffLine | null, side: Side, no: number | null, kind: LineKind, extra = '') => {
-    const selected = line ? isSelected(side, no) : false
-    return (
-      <td
-        className={`new-diff-line-number ${kind === 'context' ? 'diff-line-number-neutral' : ''} ${no == null ? 'empty-diff-line' : ''} ${extra}`}
-        data-line-number={no ?? undefined}
-        data-selected={selected}
-        style={{ backgroundColor: NUM_BG[kind] }}
-        onClick={(e) => line && onNum(side, no, e)}
-      >
-        {no}
-      </td>
-    )
-  }
+  /** A line number cell showing `no`; a click selects line `target` (unified rows select across sides). */
+  const numCell = (kind: LineKind, no: number | null, selected: boolean, target: [Side, number | null], extra = '') => (
+    <td
+      className={`new-diff-line-number ${kind === 'context' ? 'diff-line-number-neutral' : ''} ${no == null ? 'empty-diff-line' : ''} ${extra}`}
+      data-line-number={no ?? undefined}
+      data-selected={selected}
+      style={{ backgroundColor: NUM_BG[kind] }}
+      onClick={(e) => onNum(target[0], target[1], e)}
+    >
+      {no}
+    </td>
+  )
 
   const codeCell = (line: DiffLine, side: Side, words: Range[] | null | undefined, sideClass: string) => {
     const no = side === 'LEFT' ? line.oldNo : line.newNo
@@ -539,7 +545,7 @@ function DiffTable(p: TableProps) {
     const selected = split ? isSelected(side, no) : isSelected('LEFT', line.oldNo) || isSelected('RIGHT', line.newNo)
     return (
       <td
-        className={`diff-text-cell v-align-top ${sideClass}`}
+        className={`diff-text-cell ${sideClass}`}
         data-selected={selected}
         style={{ backgroundColor: LINE_BG[kind] }}
       >
@@ -595,7 +601,7 @@ function DiffTable(p: TableProps) {
     </td>
   )
 
-  const tableClass = `DiffTable tab-size ${p.compact ? 'compact' : ''}`
+  const tableClass = `DiffTable ${p.compact ? 'compact' : ''}`
   if (!split) {
     return (
       <table className={tableClass} aria-label={`Diff for: ${path}`} style={{ tabSize: p.tabSize }}>
@@ -617,48 +623,26 @@ function DiffTable(p: TableProps) {
             const side: Side = l.type === 'del' ? 'LEFT' : 'RIGHT'
             const leftTarget: [Side, number | null] = l.oldNo != null && l.type !== 'add' ? ['LEFT', l.oldNo] : ['RIGHT', l.newNo]
             const rightTarget: [Side, number | null] = l.newNo != null && l.type !== 'del' ? ['RIGHT', l.newNo] : ['LEFT', l.oldNo]
-            const comments = (
-              <>
-                {l.type !== 'add' && commentContent('LEFT', l.oldNo)}
-                {l.type !== 'del' && commentContent('RIGHT', l.newNo)}
-              </>
-            )
-            const hasComments = !!(
-              (l.type !== 'add' && (threadsAt('LEFT', l.oldNo).length || composingAt('LEFT', l.oldNo))) ||
-              (l.type !== 'del' && (threadsAt('RIGHT', l.newNo).length || composingAt('RIGHT', l.newNo)))
-            )
-            const oldNo = l.type === 'add' ? null : l.oldNo
-            const newNo = l.type === 'del' ? null : l.newNo
+            const cl = l.type !== 'add' ? commentContent('LEFT', l.oldNo) : null
+            const cr = l.type !== 'del' ? commentContent('RIGHT', l.newNo) : null
+            const selected = isSelected('LEFT', l.oldNo) || isSelected('RIGHT', l.newNo)
             return (
-              <Rows key={r.key}>
+              <Fragment key={r.key}>
                 <tr className="diff-line-row">
-                  <td
-                    className={`new-diff-line-number ${kind === 'context' ? 'diff-line-number-neutral' : ''} ${oldNo == null ? 'empty-diff-line' : ''}`}
-                    data-selected={isSelected('LEFT', l.oldNo) || isSelected('RIGHT', l.newNo)}
-                    style={{ backgroundColor: NUM_BG[kind] }}
-                    onClick={(e) => onNum(leftTarget[0], leftTarget[1], e)}
-                  >
-                    {oldNo}
-                  </td>
-                  <td
-                    className={`new-diff-line-number ${kind === 'context' ? 'diff-line-number-neutral' : ''} ${newNo == null ? 'empty-diff-line' : ''}`}
-                    data-selected={isSelected('LEFT', l.oldNo) || isSelected('RIGHT', l.newNo)}
-                    style={{ backgroundColor: NUM_BG[kind] }}
-                    onClick={(e) => onNum(rightTarget[0], rightTarget[1], e)}
-                  >
-                    {newNo}
-                  </td>
+                  {numCell(kind, l.type === 'add' ? null : l.oldNo, selected, leftTarget)}
+                  {numCell(kind, l.type === 'del' ? null : l.newNo, selected, rightTarget)}
                   {codeCell(l, side, r.words, 'left-side')}
                 </tr>
-                {hasComments && (
+                {(cl || cr) && (
                   <tr className="diff-comment-row">
                     <td colSpan={2} className="new-diff-line-number" style={{ backgroundColor: NUM_BG[kind] }} />
                     <td className="diff-comment-cell" style={{ backgroundColor: LINE_BG[kind] }}>
-                      {comments}
+                      {cl}
+                      {cr}
                     </td>
                   </tr>
                 )}
-              </Rows>
+              </Fragment>
             )
           })}
         </tbody>
@@ -689,11 +673,11 @@ function DiffTable(p: TableProps) {
           const lk = L ? kindOf(L.type) : 'context'
           const rk = R ? kindOf(R.type) : 'context'
           return (
-            <Rows key={r.key}>
+            <Fragment key={r.key}>
               <tr className="diff-line-row">
                 {L ? (
                   <>
-                    {numCell(L, 'LEFT', L.oldNo, lk, 'left-side')}
+                    {numCell(lk, L.oldNo, isSelected('LEFT', L.oldNo), ['LEFT', L.oldNo], 'left-side')}
                     {codeCell(L, 'LEFT', r.leftWords, 'left-side-diff-cell')}
                   </>
                 ) : (
@@ -704,7 +688,7 @@ function DiffTable(p: TableProps) {
                 )}
                 {R ? (
                   <>
-                    {numCell(R, 'RIGHT', R.newNo, rk, 'right-side')}
+                    {numCell(rk, R.newNo, isSelected('RIGHT', R.newNo), ['RIGHT', R.newNo], 'right-side')}
                     {codeCell(R, 'RIGHT', r.rightWords, 'right-side-diff-cell')}
                   </>
                 ) : (
@@ -738,7 +722,7 @@ function DiffTable(p: TableProps) {
                   )}
                 </tr>
               )}
-            </Rows>
+            </Fragment>
           )
         })}
       </tbody>
@@ -760,10 +744,6 @@ function ExpandButton({ e, r, unified, twin, onClick }: { e: Expander; r: HunkRo
       {e === 'up' ? <FoldUpIcon size={16} /> : e === 'down' ? <FoldDownIcon size={16} /> : <UnfoldIcon size={16} />}
     </button>
   )
-}
-
-function Rows({ children }: { children: ReactNode }) {
-  return <>{children}</>
 }
 
 /* ---------------- Comments ---------------- */
@@ -897,29 +877,22 @@ function Thread({ c }: { c: ReviewComment }) {
           </span>
         </div>
         {editing ? (
-          <div className="ReviewComment-edit">
-            <MarkdownEditor value={body} onChange={setBody} autoFocus label="Edit comment" />
-            <div className="InlineComment-footer">
-              <Button
-                onClick={() => {
-                  setBody(c.body)
-                  setEditing(false)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                disabled={!body.trim()}
-                onClick={() => {
-                  updateComment(c.id, body.trim())
-                  setEditing(false)
-                }}
-              >
-                Update comment
-              </Button>
-            </div>
-          </div>
+          <EditForm
+            className="ReviewComment-edit"
+            value={body}
+            onChange={setBody}
+            label="Edit comment"
+            saveLabel="Update comment"
+            disabled={!body.trim()}
+            onCancel={() => {
+              setBody(c.body)
+              setEditing(false)
+            }}
+            onSave={() => {
+              updateComment(c.id, body.trim())
+              setEditing(false)
+            }}
+          />
         ) : (
           <Markdown source={c.body} className="ReviewComment-body" />
         )}

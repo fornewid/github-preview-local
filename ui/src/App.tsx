@@ -1,6 +1,7 @@
 import { Component, useEffect, useMemo, type ReactNode } from 'react'
 import { Button, Flash, PageLayout, ThemeProvider } from '@primer/react'
-import { useStore } from './store'
+import { useShallow } from 'zustand/react/shallow'
+import { panelLayout, useStore } from './store'
 import { AppHeader, PullHeader } from './components/PageHeader'
 import { ChangesToolbar, useShortcuts } from './components/changes/Toolbar'
 import { FileTreeDialog, FileTreePane } from './components/changes/FileTreePane'
@@ -8,11 +9,12 @@ import { DiffList } from './components/changes/DiffEntry'
 import { SidePanel } from './components/changes/SidePanel'
 import { ChecksTab, CommitsTab, ConversationTab } from './components/Tabs'
 import { copyText } from './components/common'
-import { extOf, viewedKey } from './diff/util'
-import { MEDIA, nextZoom, useMediaQuery, useTreeBeside } from './layout'
+import { extLabel, isViewed } from './diff/util'
+import { nextZoom, useMediaQuery, useTreeBeside } from './layout'
+import { MEDIA } from './media'
 
 /** Keeps a rendering error in one part of the page from blanking the window. */
-export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
   static getDerivedStateFromError(error: Error) {
     return { error }
@@ -74,7 +76,7 @@ function Page() {
   const centered = tab === 'conversation' || tab === 'commits'
   const showPanel = !!panel && tab === 'files'
   // A docked panel hides while the window is too narrow for it and comes back when it widens.
-  const docked = showPanel && !panelDialog && wide
+  const { visible, docked } = panelLayout({ panel, panelDialog, tab }, wide)
   return (
     <>
       <AppHeader />
@@ -85,7 +87,7 @@ function Page() {
             padding="none"
             rowGap="none"
             columnGap="none"
-            className={`PullPage PullPage--${tab}`}
+            className="PullPage"
           >
             <PageLayout.Header>
               <PullHeader />
@@ -104,7 +106,7 @@ function Page() {
           </PageLayout>
         </div>
         {/* A docked panel stays mounted while hidden, so an edit in progress survives. */}
-        {showPanel && <SidePanel docked={!panelDialog} hidden={!panelDialog && !wide} />}
+        {showPanel && <SidePanel docked={!panelDialog} hidden={!visible} />}
       </div>
     </>
   )
@@ -112,7 +114,8 @@ function Page() {
 
 function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] }) {
   const files = useStore((st) => st.snapshot!.files)
-  const filter = useStore((st) => st.filter)
+  // Not the filter text: only the file tree reads it, so typing re-renders just the tree.
+  const { exts, showViewed } = useStore(useShallow((st) => ({ exts: st.filter.exts, showViewed: st.filter.showViewed })))
   const viewed = useStore((st) => st.viewed)
   const treeVisible = useStore((st) => st.settings.treeVisible)
   const treeDialog = useStore((st) => st.treeDialog)
@@ -124,12 +127,11 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
   const shown = useMemo(
     () =>
       files.filter((f) => {
-        if (filter.exts && !filter.exts.includes(extOf(f.path) || 'No extension')) return false
-        if (!filter.showViewed && viewed[f.path] === viewedKey(f)) return false
-        if (!filter.showDeleted && f.status === 'deleted') return false
+        if (exts && !exts.includes(extLabel(f.path))) return false
+        if (!showViewed && isViewed(viewed, f)) return false
         return true
       }),
-    [files, filter.exts, filter.showViewed, filter.showDeleted, viewed],
+    [files, exts, showViewed, viewed],
   )
   return (
     <>

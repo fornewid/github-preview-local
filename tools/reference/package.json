@@ -3,18 +3,6 @@
   "private": true,
   "type": "module",
   "description": "Measure the signed-in github.com pull request page and compare gh-prv-local with it (uses the installed Google Chrome). See docs/design-sync.md.",
-  "scripts": {
-    "login": "node login.mjs",
-    "snapshot": "node snapshot.mjs",
-    "states": "node states.mjs",
-    "states2": "node states2.mjs",
-    "dump": "node dump.mjs",
-    "primer-version": "node primer-version.mjs",
-    "local-states": "node local-states.mjs",
-    "ui-test": "node ui-test.mjs",
-    "breakpoints": "node breakpoints.mjs",
-    "typography": "node typography.mjs"
-  },
   "dependencies": {
     "playwright-core": "^1.56.0"
   }

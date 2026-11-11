@@ -4,25 +4,16 @@
 //   node dump.mjs <url | path/to/preview.html> <selector> [light|dark] [width] [--click selector]...
 //
 // Prints an indented outline; useful to read exact sizes, spacing and colors.
-import { chromium } from 'playwright-core'
-import os from 'node:os'
-import path from 'node:path'
 import fs from 'node:fs'
+import { exportUrl, openChrome, openGithub } from './common.mjs'
 
 const args = process.argv.slice(2)
 const clicks = []
 for (let i = args.indexOf('--click'); i >= 0; i = args.indexOf('--click')) clicks.push(args.splice(i, 2)[1])
 const [target, selector, scheme = 'light', width = '1440'] = args
 const local = fs.existsSync(target)
-const opts = { channel: 'chrome', headless: true, viewport: { width: +width, height: 900 }, colorScheme: scheme, locale: 'en-US' }
-const ctx = local
-  ? await (await chromium.launch(opts)).newContext(opts)
-  : await chromium.launchPersistentContext(path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile'), {
-      ...opts,
-      ignoreDefaultArgs: ['--use-mock-keychain'],
-    })
-const page = ctx.pages?.()[0] ?? (await ctx.newPage())
-await page.goto(local ? 'file://' + path.resolve(target) : target, { waitUntil: local ? 'load' : 'domcontentloaded', timeout: 90000 })
+const { ctx, page } = await (local ? openChrome : openGithub)({ width: +width, scheme })
+await page.goto(local ? exportUrl(target) : target, { waitUntil: local ? 'load' : 'domcontentloaded', timeout: 90000 })
 await page.waitForSelector('table', { timeout: 60000 }).catch(() => {})
 await page.waitForTimeout(local ? 2500 : 3500)
 for (const c of clicks) {

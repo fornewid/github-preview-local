@@ -5,12 +5,14 @@ import type {
   CheckDef,
   CheckStatus,
   ExistingPr,
+  FileDiff,
   PersistedState,
   PublishRequest,
   PublishResult,
   ReviewResult,
   Snapshot,
 } from './types'
+import { contentKey, sidePath, type ContentSide } from './diff/util'
 
 export interface StaticData {
   snapshot: Snapshot
@@ -22,21 +24,29 @@ export interface SnapshotQuery {
   to?: string | null
 }
 
+/** Progress of a local check, from the native side: a status change, a chunk of output or both. */
+export interface CheckEvent {
+  name: string
+  status?: CheckStatus
+  chunk?: string
+  exitCode?: number | null
+}
+
 export interface Transport {
+  /** Checks, commit ranges and Confirm (push + pull request) exist only in the native window. */
   kind: 'native' | 'static'
-  capabilities: { checks: boolean; publish: boolean; ranges: boolean; submit: boolean }
   getSnapshot(q?: SnapshotQuery): Promise<Snapshot>
-  getContents(path: string, side: 'old' | 'new', snapshot: Snapshot): Promise<string | null>
+  getContents(file: FileDiff, side: ContentSide): Promise<string | null>
   loadState(snapshot: Snapshot): Promise<PersistedState>
   saveState(snapshot: Snapshot, state: PersistedState): Promise<void>
   listChecks(): Promise<CheckDef[]>
   runCheck(name: string): Promise<void>
   cancelCheck(name: string): Promise<void>
   findPr(): Promise<ExistingPr | null>
-  onCheckEvent(cb: (e: { name: string; status?: CheckStatus; chunk?: string; exitCode?: number | null }) => void): () => void
+  onCheckEvent(cb: (e: CheckEvent) => void): () => void
   publish(req: PublishRequest): Promise<PublishResult>
   submit(result: ReviewResult, markdown: string): Promise<void>
-  openInEditor(path: string, line?: number): Promise<void>
+  openInEditor(path: string): Promise<void>
   /** Zooms the native window like a browser (no-op in a browser, which zooms by itself). */
   setZoom(scale: number): Promise<void>
 }
@@ -54,16 +64,20 @@ function stateKey(s: Snapshot) {
   return `prv:state:${s.repo.root}:${s.head.name}`
 }
 
+// Lazy import keeps the static build free from Tauri globals at runtime.
+let core: Promise<typeof import('@tauri-apps/api/core')> | undefined
+
+/** A command of the native window (Tauri IPC). */
+export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  return (await (core ??= import('@tauri-apps/api/core'))).invoke<T>(cmd, args)
+}
+
 function createNative(): Transport {
-  // Lazy import keeps the static build free from Tauri globals at runtime.
-  const api = import('@tauri-apps/api/core')
   const ev = import('@tauri-apps/api/event')
-  const invoke = async <T,>(cmd: string, args?: Record<string, unknown>) => (await api).invoke<T>(cmd, args)
   return {
     kind: 'native',
-    capabilities: { checks: true, publish: true, ranges: true, submit: true },
     getSnapshot: (q) => invoke<Snapshot>('get_snapshot', { from: q?.from ?? null, to: q?.to ?? null }),
-    getContents: (path, side) => invoke<string | null>('get_contents', { path, side }),
+    getContents: (f, side) => invoke<string | null>('get_contents', { path: sidePath(f, side), side }),
     loadState: async () => (await invoke<PersistedState | null>('load_state')) ?? emptyState(),
     saveState: (_s, state) => invoke<void>('save_state', { state }),
     listChecks: () => invoke<CheckDef[]>('list_checks'),
@@ -73,9 +87,7 @@ function createNative(): Transport {
     onCheckEvent: (cb) => {
       let un: (() => void) | undefined
       let cancelled = false
-      ev.then((m) =>
-        m.listen<{ name: string; status?: CheckStatus; chunk?: string; exitCode?: number | null }>('check-event', (e) => cb(e.payload)),
-      ).then((u) => {
+      ev.then((m) => m.listen<CheckEvent>('check-event', (e) => cb(e.payload))).then((u) => {
         if (cancelled) u()
         else un = u
       })
@@ -86,7 +98,7 @@ function createNative(): Transport {
     },
     publish: (req) => invoke<PublishResult>('publish', { req }),
     submit: (result, markdown) => invoke<void>('submit_review', { result, markdown }),
-    openInEditor: (path, line) => invoke<void>('open_in_editor', { path, line: line ?? null }),
+    openInEditor: (path) => invoke<void>('open_in_editor', { path }),
     setZoom: (scale) => invoke<void>('set_zoom', { scale }),
   }
 }
@@ -94,9 +106,8 @@ function createNative(): Transport {
 function createStatic(data: StaticData): Transport {
   return {
     kind: 'static',
-    capabilities: { checks: false, publish: false, ranges: false, submit: false },
     getSnapshot: async () => data.snapshot,
-    getContents: async (path, side) => data.contents[`${side}:${path}`] ?? null,
+    getContents: async (f, side) => data.contents[contentKey(f, side)] ?? null,
     loadState: async (s) => {
       try {
         const raw = localStorage.getItem(stateKey(s))

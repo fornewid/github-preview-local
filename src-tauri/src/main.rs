@@ -11,6 +11,8 @@ mod git;
 mod model;
 mod proc;
 mod publish;
+#[cfg(test)]
+mod testutil;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use git::{DiffEnds, Git, Options};
@@ -20,7 +22,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Parser, Debug)]
@@ -95,6 +97,8 @@ struct Current {
 
 struct AppState {
     git: Git,
+    /// `STATE_DIR` inside the git dir, resolved once.
+    state_dir: PathBuf,
     opts: Options,
     format: Format,
     selftest: bool,
@@ -119,12 +123,32 @@ fn fnv(s: &str) -> u32 {
 /// Per-repository state (pending comments, viewed files, the last review), inside the git dir.
 pub const STATE_DIR: &str = "gh-prv-local";
 
-fn state_file(git: &Git, branch: &str) -> PathBuf {
+fn state_file(state_dir: &Path, branch: &str) -> PathBuf {
     let safe: String = branch
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
         .collect();
-    git.git_path(STATE_DIR).join(format!("state-{safe}-{:08x}.json", fnv(branch)))
+    state_dir.join(format!("state-{safe}-{:08x}.json", fnv(branch)))
+}
+
+fn read_state(state_dir: &Path, branch: &str) -> Option<serde_json::Value> {
+    std::fs::read_to_string(state_file(state_dir, branch)).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+fn write_state(state_dir: &Path, branch: &str, state: &serde_json::Value) -> Result<(), String> {
+    let p = state_file(state_dir, branch);
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(state).unwrap_or_default()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
+}
+
+/// `<prefix>-<pid>-<nanoseconds>`: a file name no other gh-prv-local run picks at the same time.
+pub fn unique_name(prefix: &str) -> String {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{prefix}-{}-{nanos}", std::process::id())
 }
 
 fn is_sha(s: &str) -> bool {
@@ -170,24 +194,13 @@ async fn get_contents(app: State<'_, AppState>, path: String, side: String) -> R
 #[tauri::command]
 fn load_state(app: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
     let Some(cur) = app.current() else { return Ok(None) };
-    let p = state_file(&app.git, &cur.snapshot.head.name);
-    Ok(std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()))
-}
-
-fn write_state(git: &Git, branch: &str, state: &serde_json::Value) -> Result<(), String> {
-    let p = state_file(git, branch);
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = p.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(state).unwrap_or_default()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
+    Ok(read_state(&app.state_dir, &cur.snapshot.head.name))
 }
 
 #[tauri::command]
 fn save_state(app: State<'_, AppState>, state: serde_json::Value) -> Result<(), String> {
     let Some(cur) = app.current() else { return Ok(()) };
-    write_state(&app.git, &cur.snapshot.head.name, &state)
+    write_state(&app.state_dir, &cur.snapshot.head.name, &state)
 }
 
 #[tauri::command]
@@ -274,10 +287,9 @@ async fn publish(app: State<'_, AppState>, req: PublishRequest) -> Result<Publis
 fn submit_review(handle: tauri::AppHandle, app: State<'_, AppState>, result: serde_json::Value, markdown: String) {
     // Submitted comments must not come back as pending drafts next time.
     if let Some(cur) = app.current() {
-        let p = state_file(&app.git, &cur.snapshot.head.name);
-        if let Some(mut st) = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+        if let Some(mut st) = read_state(&app.state_dir, &cur.snapshot.head.name) {
             st["drafts"] = serde_json::json!([]);
-            let _ = write_state(&app.git, &cur.snapshot.head.name, &st);
+            let _ = write_state(&app.state_dir, &cur.snapshot.head.name, &st);
         }
     }
     if let Ok(mut r) = app.result.lock() {
@@ -290,10 +302,13 @@ fn submit_review(handle: tauri::AppHandle, app: State<'_, AppState>, result: ser
 /// the normal way, through Confirm). Ignored outside self-tests.
 #[tauri::command]
 fn selftest_log(app: State<'_, AppState>, report: serde_json::Value) {
-    if !app.selftest {
-        return;
+    if app.selftest {
+        print_report(&report);
     }
-    println!("{}", serde_json::to_string(&report).unwrap_or_default());
+}
+
+fn print_report(report: &serde_json::Value) {
+    println!("{}", serde_json::to_string(report).unwrap_or_default());
     let _ = std::io::stdout().flush();
 }
 
@@ -304,8 +319,7 @@ fn selftest_done(handle: tauri::AppHandle, app: State<'_, AppState>, report: ser
     if !app.selftest {
         return;
     }
-    println!("{}", serde_json::to_string(&report).unwrap_or_default());
-    let _ = std::io::stdout().flush();
+    print_report(&report);
     app.selftest_reported.store(true, Ordering::SeqCst);
     handle.exit(if report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) { 0 } else { 3 });
 }
@@ -322,7 +336,7 @@ fn set_zoom(window: tauri::WebviewWindow, scale: f64) -> Result<(), String> {
 /// Opens a changed file in a text editor. Never hands the file to an OS
 /// launcher (which could execute scripts or app bundles from the repository).
 #[tauri::command]
-fn open_in_editor(app: State<'_, AppState>, path: String, line: Option<u32>) -> Result<(), String> {
+fn open_in_editor(app: State<'_, AppState>, path: String) -> Result<(), String> {
     let cur = app.current().ok_or("nothing loaded")?;
     if !cur.snapshot.files.iter().any(|f| f.path == path && f.status != "deleted") {
         return Err("not a changed file".into());
@@ -334,7 +348,7 @@ fn open_in_editor(app: State<'_, AppState>, path: String, line: Option<u32>) -> 
         return Err("the file is outside the repository".into());
     }
     let f = app.git.root.join(&path).to_string_lossy().into_owned();
-    let target = format!("{f}:{}", line.unwrap_or(1));
+    let target = format!("{f}:1");
     let spawn = |prog: &str, args: &[&str]| std::process::Command::new(prog).args(args).spawn().is_ok();
     if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
         if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {
@@ -442,15 +456,7 @@ fn main() {
                         .chars()
                         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
                         .collect();
-                    let nanos = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.subsec_nanos())
-                        .unwrap_or(0);
-                    let p = std::env::temp_dir().join(format!(
-                        "{name}-{}{nanos:08x}.{}",
-                        std::process::id(),
-                        if data { "json" } else { "html" }
-                    ));
+                    let p = std::env::temp_dir().join(format!("{}.{}", unique_name(&name), if data { "json" } else { "html" }));
                     let mut f = create_private(&p).unwrap_or_else(|e| fail(e));
                     f.write_all(body.as_bytes()).unwrap_or_else(|e| fail(e));
                     p
@@ -498,11 +504,8 @@ fn main() {
                     // Only the tail is kept for the summary; without --json the full output also streams to stderr.
                     output.push_str(c);
                     if output.len() > 64 * 1024 {
-                        let mut cut = output.len() - 16 * 1024;
-                        while !output.is_char_boundary(cut) {
-                            cut += 1;
-                        }
-                        output.drain(..cut);
+                        // At least 4096 characters follow keep_tail's marker: it never reaches the 4000-character tail below.
+                        proc::keep_tail(&mut output, 16 * 1024);
                     }
                 });
                 let ok = code == Some(0);
@@ -555,12 +558,12 @@ fn run_window(git: Git, opts: Options, format: Format) {
     // `flows` clicks Confirm, which pushes and opens a pull request: only in a scratch repository
     // that scripts/native-selftest.sh prepared (and marked).
     if flows {
-        let marker = git.line(&["rev-parse", "--git-path", "gh-prv-local-selftest"]).map(|p| git.root.join(p));
-        if !marker.is_some_and(|p| p.exists()) {
+        if !git.git_path("gh-prv-local-selftest").exists() {
             fail("GH_PRV_LOCAL_SELFTEST=flows pushes and opens a pull request, so it only runs in a scratch repository prepared by scripts/native-selftest.sh");
         }
     }
     let state = AppState {
+        state_dir: git.git_path(STATE_DIR),
         git,
         opts,
         format,
@@ -648,8 +651,12 @@ fn run_window(git: Git, opts: Options, format: Format) {
                 !running.is_empty()
             });
             if any.unwrap_or(false) {
-                // Give the runner threads a moment to kill their process trees.
-                std::thread::sleep(Duration::from_millis(400));
+                // Give the runner threads a moment (at most 400ms) to kill their process trees;
+                // each leaves `running` once its tree is gone.
+                let deadline = Instant::now() + Duration::from_millis(400);
+                while Instant::now() < deadline && st.running.lock().is_ok_and(|r| !r.is_empty()) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
             }
             if !st.selftest_reported.load(Ordering::SeqCst) {
                 let result = st.result.lock().ok().and_then(|r| r.clone());

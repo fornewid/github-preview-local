@@ -1,30 +1,21 @@
-// Captures the same states as states.mjs / states2.mjs from a gh-prv-local export, so they can be compared
-// side by side with the github.com captures (compare.py).
+// Captures, from a gh-prv-local export, the states of states.mjs that gh-prv-local has (00–04, 06, 08 and
+// 12–18; not the Preview menu, the comments panel, the hovered line or the expanded hunk), under the
+// same file names, so they can be compared side by side with the github.com captures (compare.py).
 //
 //   node local-states.mjs <preview.html> <outDir> [light|dark]
-import { chromium } from 'playwright-core'
 import fs from 'node:fs'
-import path from 'node:path'
+import { openChrome, openExport } from './common.mjs'
 
 const [, , file, outDir = 'out', scheme = 'light'] = process.argv
 fs.mkdirSync(outDir, { recursive: true })
-const browser = await chromium.launch({ channel: 'chrome', headless: true })
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: scheme, locale: 'en-US' })
-const page = await ctx.newPage()
+const { browser, page } = await openChrome({ scheme, scale: 2 })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
-const url = 'file://' + path.resolve(file)
 const settle = (ms = 600) => page.waitForTimeout(ms)
 const shot = (n) => page.screenshot({ path: `${outDir}/${n}.png` })
-async function open(q = '?diff=split', settings = { treeVisible: false }) {
-  await page.goto(url + q, { waitUntil: 'load' })
-  await page.evaluate((s) => {
-    localStorage.setItem('prv:settings', JSON.stringify({ diffView: 'split', compact: true, ...s }))
-  }, settings)
-  await page.goto(url + q, { waitUntil: 'load' })
-  await settle(2500)
-}
+// Viewed files and pending comments carry over from one open() to the next.
+const open = (query = '?diff=split', settings = { treeVisible: false }) => openExport(page, file, { query, settings, clear: false, wait: 2500 })
 async function step(name, fn) {
   try {
     await fn()

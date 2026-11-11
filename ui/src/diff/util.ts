@@ -1,4 +1,4 @@
-import type { FileDiff } from '../types'
+import type { Commit, FileDiff } from '../types'
 
 export type StatBlock = 'added' | 'deleted' | 'neutral'
 
@@ -23,15 +23,15 @@ export function diffstatBlocks(add: number, del: number): StatBlock[] {
   return out
 }
 
-/** File header paths longer than 92 chars are shown as `...` + the last 89 chars. */
-export function truncatePath(path: string, max = 92) {
-  return path.length > max ? '...' + path.slice(path.length - (max - 3)) : path
-}
-
 export function extOf(path: string) {
   const base = path.split('/').pop() ?? path
   const i = base.lastIndexOf('.')
   return i > 0 ? base.slice(i) : ''
+}
+
+/** A file's entry in the file tree's extension filter. */
+export function extLabel(path: string) {
+  return extOf(path) || 'No extension'
 }
 
 /** Key used for "Viewed": the file is un-viewed when its content changes. */
@@ -39,10 +39,29 @@ export function viewedKey(f: FileDiff) {
   return `${f.oldSha ?? ''}:${f.newSha ?? ''}:${f.additions}:${f.deletions}`
 }
 
+export function isViewed(viewed: Record<string, string>, f: FileDiff) {
+  return viewed[f.path] === viewedKey(f)
+}
+
+export type ContentSide = 'old' | 'new'
+
+/** The path a side of the diff is read from (a renamed file's old side has its old path). */
+export function sidePath(f: Pick<FileDiff, 'path' | 'oldPath'>, side: ContentSide) {
+  return side === 'old' ? (f.oldPath ?? f.path) : f.path
+}
+
+/** Key of a side's contents (`old:path`, `new:path`), in the store and in an export's data. */
+export function contentKey(f: Pick<FileDiff, 'path' | 'oldPath'>, side: ContentSide) {
+  return `${side}:${sidePath(f, side)}`
+}
+
 export function anchorFor(path: string) {
-  let h = 0
-  for (let i = 0; i < path.length; i++) h = (Math.imul(31, h) + path.charCodeAt(i)) | 0
-  return 'diff-' + (h >>> 0).toString(16)
+  return 'diff-' + (hashOf(path) >>> 0).toString(16)
+}
+
+/** The commit's author, then its co-authors. */
+export function commitAuthors(c: Commit) {
+  return [c.author, ...c.coAuthors.filter((n) => n !== c.author)]
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -57,18 +76,6 @@ export function shortDate(iso: string) {
 export function longDate(iso: string) {
   const d = new Date(iso)
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
-}
-
-export function relativeTime(iso: string) {
-  const diff = (Date.now() - new Date(iso).getTime()) / 1000
-  if (diff < 45) return 'now'
-  if (diff < 90) return '1 minute ago'
-  if (diff < 3600) return `${Math.round(diff / 60)} minutes ago`
-  if (diff < 5400) return '1 hour ago'
-  if (diff < 86400) return `${Math.round(diff / 3600)} hours ago`
-  if (diff < 172800) return 'yesterday'
-  if (diff < 30 * 86400) return `${Math.round(diff / 86400)} days ago`
-  return `on ${shortDate(iso)}`
 }
 
 export function plural(n: number, one: string, many = one + 's') {

@@ -7,6 +7,8 @@
 //       Only in a scratch repository prepared by scripts/native-selftest.sh (gh-prv-local
 //       refuses otherwise).
 import { canConfirm, useStore } from './store'
+import { treeBesideNow } from './layout'
+import { invoke } from './transport'
 
 type Report = Record<string, unknown>
 
@@ -20,17 +22,14 @@ async function until(what: string, ok: () => unknown, ms = 20000) {
   }
   throw new Error(`timed out waiting for: ${what}`)
 }
+/** Like `until`, but carries on after the timeout: the report then shows what is wrong. */
+const settle = (what: string, ok: () => unknown, ms?: number) => until(what, ok, ms).catch(() => {})
 const $ = <T extends Element = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)
 const withText = (sel: string, text: string | RegExp, root: ParentNode = document) =>
   [...root.querySelectorAll<HTMLElement>(sel)].find((e) => (typeof text === 'string' ? e.textContent?.trim() === text : text.test(e.textContent ?? '')))
 function click(el: Element | null | undefined, what: string) {
   if (!el) throw new Error(`not found: ${what}`)
   ;(el as HTMLElement).click()
-}
-
-async function invoke(cmd: string, args: Record<string, unknown>) {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke(cmd, args)
 }
 
 /** A progress line on stdout (flows only), so a stuck step shows where it stopped. */
@@ -46,12 +45,16 @@ async function basic(): Promise<Report & { ok: boolean }> {
   // user saved is already applied, so compute from the unzoomed width and restore it after.
   const saved = s.settings.zoom || 1
   const base = window.innerWidth * saved
-  s.applySettings({ zoom: 1.5 }, false)
-  await sleep(1200)
+  const zoomTo = (zoom: number) => useStore.setState((st) => ({ settings: { ...st.settings, zoom } }))
+  // Zoomed and laid out again: the file tree is beside the diffs exactly when it fits.
+  const zoomed = (zoom: number) => () =>
+    Math.abs(window.innerWidth - base / zoom) < 2 && !!$('.FileTreePane') === (useStore.getState().settings.treeVisible && treeBesideNow())
+  zoomTo(1.5)
+  await settle('zoomed in', zoomed(1.5), 5000)
   // 1440px / 1.5 = 960px: the file tree must have left the side (it opens as a dialog there).
   const zoom = { base, zoomed: window.innerWidth, treePane: !!$('.FileTreePane') }
-  s.applySettings({ zoom: saved }, false)
-  await sleep(600)
+  zoomTo(saved)
+  await settle('zoom restored', zoomed(saved), 5000)
   const highlighted = document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length
   const fonts = fontCheck()
   return {
@@ -178,7 +181,8 @@ async function confirm(): Promise<void> {
 
 export async function runSelftest(mode: true | 'flows') {
   try {
-    await sleep(4000)
+    // Loaded, rendered and highlighted (the report says what is missing if that never happens).
+    await settle('first render', () => useStore.getState().error || $('.pl-k, .pl-c, .pl-s, .pl-en'))
     const report = await basic()
     if (mode !== 'flows' || !report.ok) return await invoke('selftest_done', { report })
     verbose = true

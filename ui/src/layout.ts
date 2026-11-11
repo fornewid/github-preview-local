@@ -2,25 +2,10 @@
 // docs/reference.md, "Widths and zoom"). CSS handles everything it can (`prv.css`, media and
 // container queries with the same thresholds); these are for the parts that change what is
 // rendered. All values are CSS pixels, so browser zoom and the native window's zoom behave alike.
-import { useCallback, useLayoutEffect, useState, useSyncExternalStore, type RefObject } from 'react'
+import { useLayoutEffect, useState, useSyncExternalStore, type RefObject } from 'react'
 import { create } from 'zustand'
-import { useStore } from './store'
-
-export const MEDIA = {
-  /** Primer's narrow range: fullscreen dialogs, compact file headers. */
-  narrow: '(max-width: calc(48rem - 0.02px))',
-  /** The side panel is docked beside the page; below this it opens as a dialog. */
-  dockedPanel: '(min-width: 1012px)',
-  /**
-   * The file tree sits beside the diffs while the page container is at least 1012px wide; below
-   * that it opens as a dialog. The container has 32px padding on each side (1076px window) and
-   * none on the right while the side panel is docked (1044px window).
-   */
-  treePane: '(min-width: 1076px)',
-  treePaneWithPanel: '(min-width: 1044px)',
-  /** Primer's --pane-max-width-diff steps from 511px to 959px here. */
-  wide: '(min-width: 1280px)',
-}
+import { panelLayout, useStore } from './store'
+import { MEDIA, mediaMatches } from './media'
 
 /**
  * The toolbar's overflow menu, by the toolbar's own width (its container query size): at 544px
@@ -31,37 +16,16 @@ export function toolbarOverflow(width: number): 0 | 1 | 2 {
   return width > 544 ? 0 : width === 544 ? 1 : 2
 }
 
-const lists = new Map<string, MediaQueryList>()
-const mql = (query: string) => {
-  let m = lists.get(query)
-  if (!m) lists.set(query, (m = window.matchMedia(query)))
-  return m
-}
-
-/**
- * Evaluated fresh each time: after the native window zooms, WebKit leaves an existing
- * MediaQueryList's `matches` stale (and sends no `change`), while a new one is correct.
- */
-export function mediaMatches(query: string): boolean {
-  return window.matchMedia(query).matches
+// Width queries change only when the window resizes (or zooms: WebKit sends no event then, so
+// useZoom sends one), and WebKit's MediaQueryList `change` events can be stale: re-evaluate on resize.
+function onResize(cb: () => void) {
+  window.addEventListener('resize', cb)
+  return () => window.removeEventListener('resize', cb)
 }
 
 export function useMediaQuery(query: string): boolean {
-  const subscribe = useCallback(
-    (cb: () => void) => {
-      const m = mql(query)
-      m.addEventListener('change', cb)
-      // WebKit (the macOS window) applies zoom to CSS media queries without a `change` event.
-      window.addEventListener('resize', cb)
-      return () => {
-        m.removeEventListener('change', cb)
-        window.removeEventListener('resize', cb)
-      }
-    },
-    [query],
-  )
   return useSyncExternalStore(
-    subscribe,
+    onResize,
     () => mediaMatches(query),
     () => false,
   )
@@ -69,22 +33,19 @@ export function useMediaQuery(query: string): boolean {
 
 /** The side panel the user sees (a docked one hidden by a narrow window counts as closed). */
 export function useVisiblePanel() {
-  const panel = useStore((st) => st.panel)
-  const dialog = useStore((st) => st.panelDialog)
   const wide = useMediaQuery(MEDIA.dockedPanel)
-  return panel && (dialog || wide) ? panel : null
+  return useStore((st) => (panelLayout(st, wide).visible ? st.panel : null))
 }
 
 /** Whether the file tree belongs beside the diffs now (see MEDIA.treePane). */
 export function useTreeBeside(): boolean {
-  const panelDocked = useStore((st) => !!st.panel && st.tab === 'files' && !st.panelDialog)
   const wide = useMediaQuery(MEDIA.dockedPanel)
-  return useMediaQuery(panelDocked && wide ? MEDIA.treePaneWithPanel : MEDIA.treePane)
+  const docked = useStore((st) => panelLayout(st, wide).docked)
+  return useMediaQuery(docked ? MEDIA.treePaneWithPanel : MEDIA.treePane)
 }
 
 export function treeBesideNow(): boolean {
-  const st = useStore.getState()
-  const docked = !!st.panel && st.tab === 'files' && !st.panelDialog && mediaMatches(MEDIA.dockedPanel)
+  const docked = panelLayout(useStore.getState(), mediaMatches(MEDIA.dockedPanel)).docked
   return mediaMatches(docked ? MEDIA.treePaneWithPanel : MEDIA.treePane)
 }
 
@@ -110,14 +71,14 @@ export function useContentWidthClass<T>(ref: RefObject<HTMLElement | null>, clas
 export const SIDE_PANEL = { min: 450, default: 544, max: 768, storageKey: 'prv:side-panel-width' }
 
 /** Largest width at this viewport: `min(768, max(450, viewport - diff))`, diff 959px from 1280px, else 511px. */
-export function sidePanelMax(viewport = window.innerWidth) {
+export function sidePanelMax() {
   // The same media query as the CSS, so fractional (zoomed) widths agree.
   const diff = mediaMatches(MEDIA.wide) ? 959 : 511
-  return Math.min(SIDE_PANEL.max, Math.max(SIDE_PANEL.min, viewport - diff))
+  return Math.min(SIDE_PANEL.max, Math.max(SIDE_PANEL.min, window.innerWidth - diff))
 }
 
-export function clampSidePanel(width: number, viewport = window.innerWidth) {
-  return Math.max(SIDE_PANEL.min, Math.min(width, sidePanelMax(viewport)))
+export function clampSidePanel(width: number, max = sidePanelMax()) {
+  return Math.max(SIDE_PANEL.min, Math.min(width, max))
 }
 
 function storedSidePanelWidth(): number {
@@ -130,8 +91,11 @@ function storedSidePanelWidth(): number {
   return SIDE_PANEL.default
 }
 
-/** The side panel's current width (CSS clamps what is shown). */
-export const useSidePanelWidth = create<{ width: number }>(() => ({ width: storedSidePanelWidth() }))
+/** The side panel's current width (CSS clamps what is shown) and the largest width this window allows. */
+export const useSidePanelWidth = create<{ width: number; max: number }>(() => ({
+  width: storedSidePanelWidth(),
+  max: sidePanelMax(),
+}))
 
 /** Drag end, arrow keys, double-click: kept across sessions (github.com keeps it per user). */
 export function setSidePanelWidth(width: number) {
@@ -146,12 +110,11 @@ export function setSidePanelWidth(width: number) {
 // Primer (usePaneWidth) lowers the current width to the new maximum on every window resize and
 // does not raise it again when the window grows; github.com keeps the panel mounted, so this
 // happens even while it is closed. Not saved: a reload starts from the saved width again.
-if (typeof window !== 'undefined') {
-  window.addEventListener('resize', () => {
-    const max = sidePanelMax()
-    if (useSidePanelWidth.getState().width > max) useSidePanelWidth.setState({ width: max })
-  })
-}
+window.addEventListener('resize', () => {
+  const max = sidePanelMax()
+  const { width, max: was } = useSidePanelWidth.getState()
+  if (width > max || max !== was) useSidePanelWidth.setState({ width: Math.min(width, max), max })
+})
 
 /* ---------------- Native window zoom (browsers zoom by themselves) ---------------- */
 

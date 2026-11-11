@@ -13,9 +13,7 @@
 //
 // github.com is read with the signed-in profile from login.mjs and only read: the file tree is
 // expanded for the run (needed to see when it moves into a dialog) and collapsed again if it was.
-import { chromium } from 'playwright-core'
-import os from 'node:os'
-import path from 'node:path'
+import { gotoGithub, openChrome, openExport, openGithub, prBase, setTreeVisible, treeVisible } from './common.mjs'
 
 const args = process.argv.slice(2)
 const opt = (name, def) => {
@@ -136,12 +134,6 @@ async function sweep(page) {
   return { first: grid[0][1], changes }
 }
 
-const treeOn = (page) =>
-  page.evaluate(() => {
-    const t = document.querySelector('[role="tree"]')
-    return !!t && t.getBoundingClientRect().width > 0 && !t.closest('[role="dialog"]')
-  })
-
 async function github() {
   // Registered before Chrome starts: Ctrl-C only sets a flag, the run then stops at its next step
   // and restores what it changed. A second Ctrl-C quits at once.
@@ -157,44 +149,27 @@ async function github() {
   }
   let ctx
   try {
-    ctx = await chromium.launchPersistentContext(path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile'), {
-      channel: 'chrome',
-      headless: true,
-      viewport: { width: 1440, height: 900 },
-      locale: 'en-US',
-      ignoreDefaultArgs: ['--use-mock-keychain'],
-      // Our handler above runs instead, so the browser stays open until the tree is restored.
-      handleSIGINT: false,
-      handleSIGTERM: false,
-    })
-    const page = ctx.pages()[0] || (await ctx.newPage())
-    const url = prUrl.replace(/\/(files|changes).*$/, '').replace(/\/$/, '') + '/changes?diff=split'
+    // Our handler above runs instead, so the browser stays open until the tree is restored.
+    const opened = await openGithub({ handleSIGINT: false, handleSIGTERM: false })
+    ctx = opened.ctx
+    const page = opened.page
+    const url = prBase(prUrl) + '/changes?diff=split'
     // github.com keeps the file tree's visibility per user: put it back however the run ends (the
     // side panel is not kept, a reload closes it).
     let initial = true
     try {
       stopIfInterrupted()
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
-      await page.waitForSelector('table', { timeout: 60000 })
-      await page.waitForTimeout(3000)
+      await gotoGithub(page, url)
       stopIfInterrupted()
-      initial = await treeOn(page)
-      if (!initial) {
-        await page.getByRole('button', { name: 'Expand file tree' }).first().click()
-        await page.waitForTimeout(1200)
-      }
+      initial = await treeVisible(page)
+      await setTreeVisible(page, true)
       await openPanel(page)
       return await sweep(page)
     } finally {
       try {
         await page.setViewportSize({ width: 1440, height: 900 })
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
-        await page.waitForSelector('table', { timeout: 60000 })
-        await page.waitForTimeout(2000)
-        if (!initial && (await treeOn(page))) {
-          await page.getByRole('button', { name: 'Collapse file tree' }).first().click()
-          await page.waitForTimeout(1500)
-        }
+        await gotoGithub(page, url, { wait: 2000 })
+        if (!initial) await setTreeVisible(page, false)
       } catch (e) {
         console.error(`could not restore the file tree on github.com (${e.message.split('\n')[0]}); check it by hand`)
       }
@@ -208,16 +183,8 @@ async function github() {
 }
 
 async function prv() {
-  const browser = await chromium.launch({ channel: 'chrome', headless: true })
-  const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })).newPage()
-  const url = 'file://' + path.resolve(exportFile) + '?diff=split'
-  await page.goto(url, { waitUntil: 'load' })
-  await page.evaluate(() => {
-    localStorage.clear()
-    localStorage.setItem('prv:settings', JSON.stringify({ diffView: 'split', compact: true, treeVisible: true }))
-  })
-  await page.goto(url, { waitUntil: 'load' })
-  await page.waitForTimeout(2000)
+  const { browser, page } = await openChrome()
+  await openExport(page, exportFile, { query: '?diff=split', settings: { treeVisible: true } })
   try {
     await openPanel(page)
     return await sweep(page)

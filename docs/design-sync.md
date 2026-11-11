@@ -3,7 +3,7 @@
 gh-prv-local copies the look of github.com's pull request page. When GitHub ships a change,
 re-measure the page, compare it with gh-prv-local side by side and update it. Everything below runs
 locally with the installed Google Chrome; the tools live in `tools/reference` (`npm install` there
-once).
+once; what they share, such as starting the signed-in Chrome, is in `common.mjs`).
 
 ## 1. Sign in once
 
@@ -24,8 +24,8 @@ stores; anything they open (menus, panels, file tree) is closed again.
 cd tools/reference
 PR=https://github.com/webtoon/ReadMoreTextView/pull/127     # any PR you can read
 node snapshot.mjs  $PR ../../.ref/gh          # pages, full screenshots, structure + styles JSON
-node states.mjs    $PR ../../.ref/gh-states   # menus, dialogs, panels, hover, expanded hunk
-node states2.mjs   $PR ../../.ref/gh-states   # submenus, inline comment form, tree filter, merge panel
+node states.mjs    $PR ../../.ref/gh-states   # menus, submenus, dialogs, panels, hover, inline comment form,
+                                              # tree filter, merge panel, expanded hunk
 node dump.mjs "$PR/changes" '.DiffFileHeader, [class*="diff-file-header"]'   # exact values of one area
 ```
 

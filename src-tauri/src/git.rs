@@ -3,11 +3,11 @@
 //! branch and the head.
 
 use crate::model::*;
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// The empty tree id for this repository's hash algorithm (SHA-1 or SHA-256).
 pub fn empty_tree(git: &Git) -> String {
@@ -20,6 +20,8 @@ const MAX_BLOB_BYTES: usize = 5 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct Git {
     pub root: PathBuf,
+    /// A partial clone: git fetches missing objects while it reads them.
+    partial: bool,
     /// A partial clone whose missing objects would come from a remote other than `origin`:
     /// git may not fetch them on demand (gh-prv-local talks to `origin` only).
     no_lazy_fetch: bool,
@@ -40,8 +42,9 @@ impl Git {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        let mut git = Git { root: PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()), no_lazy_fetch: false };
-        git.no_lazy_fetch = foreign_promisor(&git);
+        let mut git =
+            Git { root: PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()), partial: false, no_lazy_fetch: false };
+        (git.partial, git.no_lazy_fetch) = promisors(&git);
         Ok(git)
     }
 
@@ -110,9 +113,30 @@ impl Git {
     }
 
     pub fn git_path(&self, name: &str) -> PathBuf {
-        let p = self.line(&["rev-parse", "--git-path", name]).unwrap_or_else(|| format!(".git/{name}"));
-        let p = PathBuf::from(p);
-        if p.is_absolute() { p } else { self.root.join(p) }
+        let [p] = self.git_paths([name]);
+        p
+    }
+
+    /// `git rev-parse --git-path` for several names with one call, relative paths joined to the
+    /// root (`.git/<name>` when git cannot tell).
+    pub fn git_paths<const N: usize>(&self, names: [&str; N]) -> [PathBuf; N] {
+        let mut args = vec!["rev-parse"];
+        for name in names {
+            args.extend(["--git-path", name]);
+        }
+        let out = self.run(&args).unwrap_or_default();
+        let mut lines = out.lines().map(str::trim);
+        names.map(|name| {
+            let p = PathBuf::from(lines.next().filter(|l| !l.is_empty()).map_or_else(|| format!(".git/{name}"), str::to_string));
+            if p.is_absolute() { p } else { self.root.join(p) }
+        })
+    }
+
+    /// Spawns git with `input` written to its stdin; stdout is piped, stderr discarded.
+    fn spawn_with_input(&self, args: &[&str], input: String) -> Option<std::process::Child> {
+        let mut cmd = self.cmd();
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+        crate::proc::spawn_with_input(&mut cmd, Some(input)).ok()
     }
 }
 
@@ -138,8 +162,9 @@ pub fn pick_remote(git: &Git) -> Option<String> {
     remotes.lines().map(str::trim).any(|r| r == "origin").then(|| "origin".to_string())
 }
 
-/// Whether a partial clone would fetch missing objects from a remote other than `origin`.
-fn foreign_promisor(git: &Git) -> bool {
+/// Whether this is a partial clone, and whether it would fetch missing objects from a remote other
+/// than `origin`.
+fn promisors(git: &Git) -> (bool, bool) {
     // --type=bool normalizes yes/on/1/TRUE and a key without a value to "true".
     let promisors = git.run(&["config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
     let named = promisors.lines().filter_map(|l| {
@@ -148,7 +173,8 @@ fn foreign_promisor(git: &Git) -> bool {
         (value.trim() == "true").then_some(name)
     });
     let partial = git.line(&["config", "extensions.partialClone"]);
-    named.chain(partial.as_deref()).any(|r| r != "origin")
+    let remotes: Vec<&str> = named.chain(partial.as_deref()).collect();
+    (!remotes.is_empty(), remotes.iter().any(|&r| r != "origin"))
 }
 
 /// The GitHub host of an SSH remote, for `gh`. The host in the URL wins when gh is logged in to it
@@ -216,6 +242,9 @@ pub fn parse_remote(url: &str) -> (Option<String>, Option<String>, Option<String
     (Some(host), owner, name)
 }
 
+/// Base branch names tried, in order, when the remote has no default branch (HEAD).
+const DEFAULT_BRANCHES: [&str; 4] = ["main", "master", "develop", "trunk"];
+
 fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(String, String), String> {
     let strip = |r: &str| -> String {
         match remote {
@@ -238,13 +267,13 @@ fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(S
         if let Some(s) = git.line(&["symbolic-ref", "--short", "-q", &format!("refs/remotes/{rm}/HEAD")]) {
             return Ok((s.clone(), strip(&s)));
         }
-        for b in ["main", "master", "develop", "trunk"] {
+        for b in DEFAULT_BRANCHES {
             if git.ok(&["rev-parse", "--verify", "-q", &format!("refs/remotes/{rm}/{b}")]) {
                 return Ok((format!("{rm}/{b}"), b.to_string()));
             }
         }
     }
-    for b in ["main", "master", "develop", "trunk"] {
+    for b in DEFAULT_BRANCHES {
         if git.ok(&["rev-parse", "--verify", "-q", &format!("refs/heads/{b}")]) {
             return Ok((b.to_string(), b.to_string()));
         }
@@ -258,9 +287,7 @@ fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(S
 /// Snapshot of the working tree (tracked + untracked, honoring .gitignore) as a tree object,
 /// built in a temporary index so the user's staging area is untouched.
 fn worktree_tree(git: &Git) -> Result<String, String> {
-    let index = git.git_path("index");
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    let tmp = git.git_path(&format!("gh-prv-local-index-{}-{nanos}.tmp", std::process::id()));
+    let [index, tmp] = git.git_paths(["index", &format!("{}.tmp", crate::unique_name("gh-prv-local-index"))]);
     if let Some(dir) = tmp.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -295,23 +322,57 @@ struct RawEntry {
     old_path: Option<String>,
 }
 
-fn parse_raw(bytes: &[u8]) -> Vec<RawEntry> {
-    let text = String::from_utf8_lossy(bytes);
-    let mut toks = text.split('\0').filter(|t| !t.is_empty());
+/// The NUL-terminated fields of `git diff -z` output.
+struct Fields<'a> {
+    out: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Iterator for Fields<'a> {
+    type Item = Cow<'a, str>;
+
+    fn next(&mut self) -> Option<Cow<'a, str>> {
+        let field = self.peek()?;
+        self.pos += field.len() + 1;
+        Some(String::from_utf8_lossy(field))
+    }
+}
+
+impl<'a> Fields<'a> {
+    fn new(out: &'a [u8]) -> Self {
+        Fields { out, pos: 0 }
+    }
+
+    fn peek(&self) -> Option<&'a [u8]> {
+        let rest = &self.out[self.pos..];
+        rest.iter().position(|&b| b == 0).map(|n| &rest[..n])
+    }
+
+    fn next_owned(&mut self) -> String {
+        self.next().map(Cow::into_owned).unwrap_or_default()
+    }
+
+    /// Everything after the fields read so far.
+    fn rest(&self) -> &'a [u8] {
+        &self.out[self.pos..]
+    }
+}
+
+/// `--raw -z` entries, up to the first field that does not start one.
+fn parse_raw(fields: &mut Fields) -> Vec<RawEntry> {
     let mut out = vec![];
-    while let Some(meta) = toks.next() {
-        let meta = meta.trim_start_matches(':');
-        let f: Vec<&str> = meta.split(' ').collect();
+    while fields.peek().is_some_and(|f| f.starts_with(b":")) {
+        let meta = fields.next().unwrap_or_default();
+        let f: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
         if f.len() < 5 {
             continue;
         }
         let status = f[4].chars().next().unwrap_or('M');
         let (old_path, path) = if status == 'R' || status == 'C' {
-            let o = toks.next().unwrap_or_default().to_string();
-            let n = toks.next().unwrap_or_default().to_string();
-            (Some(o), n)
+            let o = fields.next_owned();
+            (Some(o), fields.next_owned())
         } else {
-            (None, toks.next().unwrap_or_default().to_string())
+            (None, fields.next_owned())
         };
         out.push(RawEntry {
             old_mode: f[0].into(),
@@ -326,22 +387,21 @@ fn parse_raw(bytes: &[u8]) -> Vec<RawEntry> {
     out
 }
 
-/// `--numstat -z` → path -> (additions, deletions, binary)
-fn parse_numstat(bytes: &[u8]) -> HashMap<String, (u64, u64, bool)> {
-    let text = String::from_utf8_lossy(bytes);
-    let mut toks = text.split('\0');
+/// `--numstat -z` → path -> (additions, deletions, binary), up to the empty field that
+/// separates it from a patch.
+fn parse_numstat(fields: &mut Fields) -> HashMap<String, (u64, u64, bool)> {
     let mut out = HashMap::new();
-    while let Some(t) = toks.next() {
+    while let Some(t) = fields.next() {
         if t.is_empty() {
-            continue;
+            break;
         }
         let mut f = t.splitn(3, '\t');
         let a = f.next().unwrap_or("");
         let d = f.next().unwrap_or("");
         let p = f.next().unwrap_or("");
         let path = if p.is_empty() {
-            let _old = toks.next();
-            toks.next().unwrap_or("").to_string()
+            let _old = fields.next();
+            fields.next_owned()
         } else {
             p.to_string()
         };
@@ -473,20 +533,8 @@ fn generated_attrs(git: &Git, paths: &[String]) -> HashMap<String, Option<bool>>
     if paths.is_empty() {
         return out;
     }
-    let child = git
-        .cmd()
-        .args(["check-attr", "-z", "--stdin", "linguist-generated"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else { return out };
-    if let Some(mut stdin) = child.stdin.take() {
-        let input = paths.join("\0") + "\0";
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(input.as_bytes());
-        });
-    }
+    let input = paths.join("\0") + "\0";
+    let Some(child) = git.spawn_with_input(&["check-attr", "-z", "--stdin", "linguist-generated"], input) else { return out };
     let Ok(res) = child.wait_with_output() else { return out };
     let text = String::from_utf8_lossy(&res.stdout);
     let toks: Vec<&str> = text.split('\0').collect();
@@ -513,31 +561,43 @@ fn humanize_branch(b: &str) -> String {
     }
 }
 
-/// PR template from the base branch (like GitHub), read from git objects so
-/// symlinks in the working tree cannot point outside the repository.
-fn pr_template(git: &Git, base_sha: &str) -> Option<String> {
-    for p in [
-        ".github/pull_request_template.md",
-        ".github/PULL_REQUEST_TEMPLATE.md",
-        "pull_request_template.md",
-        "PULL_REQUEST_TEMPLATE.md",
-        "docs/pull_request_template.md",
-        "docs/PULL_REQUEST_TEMPLATE.md",
-    ] {
-        if let Some(s) = blob_text(git, base_sha, p) {
-            return Some(s);
-        }
-    }
-    let list = git.run(&["ls-tree", "--name-only", &format!("{base_sha}:.github/PULL_REQUEST_TEMPLATE")]).ok()?;
-    let mut names: Vec<&str> = list.lines().filter(|n| n.ends_with(".md")).collect();
-    names.sort();
-    names.first().and_then(|n| blob_text(git, base_sha, &format!(".github/PULL_REQUEST_TEMPLATE/{n}")))
+const PR_TEMPLATES: [&str; 6] = [
+    ".github/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    "pull_request_template.md",
+    "PULL_REQUEST_TEMPLATE.md",
+    "docs/pull_request_template.md",
+    "docs/PULL_REQUEST_TEMPLATE.md",
+];
+/// A folder of templates: GitHub uses the first `.md` file in it.
+const PR_TEMPLATE_DIR: &str = ".github/PULL_REQUEST_TEMPLATE/";
+const CODEOWNERS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+
+/// Mode of each of `paths` that exists in `treeish` (a path ending in `/` lists that folder),
+/// with one `ls-tree` for all of them. Paths git quotes come back quoted.
+fn tree_modes(git: &Git, treeish: &str, paths: &[&str]) -> HashMap<String, String> {
+    let list = git.run(&[&["ls-tree", treeish, "--"][..], paths].concat()).unwrap_or_default();
+    list.lines()
+        .filter_map(|l| {
+            let (meta, path) = l.split_once('\t')?;
+            Some((path.to_string(), meta.split_whitespace().next()?.to_string()))
+        })
+        .collect()
 }
 
-/// A regular file (not a symlink) at `<treeish>:<path>`, as text.
-fn blob_text(git: &Git, treeish: &str, path: &str) -> Option<String> {
-    let entry = git.run(&["ls-tree", treeish, "--", path]).ok()?;
-    let mode = entry.split_whitespace().next()?;
+/// PR template from the base branch (like GitHub), read from git objects so
+/// symlinks in the working tree cannot point outside the repository.
+fn pr_template(git: &Git, base_sha: &str, modes: &HashMap<String, String>) -> Option<String> {
+    if let Some(s) = PR_TEMPLATES.iter().find_map(|p| blob_text(git, base_sha, modes, p)) {
+        return Some(s);
+    }
+    let first = modes.keys().filter(|p| p.starts_with(PR_TEMPLATE_DIR) && p.ends_with(".md")).min()?;
+    blob_text(git, base_sha, modes, first)
+}
+
+/// A regular file (not a symlink) at `<treeish>:<path>`, as text; `modes` from `tree_modes`.
+fn blob_text(git: &Git, treeish: &str, modes: &HashMap<String, String>, path: &str) -> Option<String> {
+    let mode = modes.get(path)?;
     if mode != "100644" && mode != "100755" {
         return None;
     }
@@ -558,24 +618,6 @@ fn strip_userinfo(url: &str) -> String {
         }
     }
     url.to_string()
-}
-
-pub fn now_rfc3339() -> String {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    // civil_from_days (Howard Hinnant)
-    let z = days + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 pub struct Resolved {
@@ -644,7 +686,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     let log = git.run(&[
         "log",
         "--reverse",
-        "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%cI%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1d)%x1f%s%x1f%b%x1e",
+        "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%cI%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1d)%x1f%s%x1f%b%x1e",
         &format!("{merge_base}..{head_sha}"),
     ])?;
     let commits: Vec<Commit> = log
@@ -653,17 +695,15 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         .filter(|r| !r.trim().is_empty())
         .filter_map(|r| {
             let f: Vec<&str> = r.split('\x1f').collect();
-            (f.len() >= 10).then(|| Commit {
+            (f.len() >= 8).then(|| Commit {
                 sha: f[0].into(),
                 short: f[1].into(),
                 author: f[2].into(),
-                email: f[3].into(),
-                date: f[4].into(),
-                committer: f[5].into(),
-                committer_date: f[6].into(),
-                co_authors: co_authors(f[7]),
-                subject: f[8].into(),
-                body: f[9].trim().into(),
+                date: f[3].into(),
+                committer_date: f[4].into(),
+                co_authors: co_authors(f[5]),
+                subject: f[6].into(),
+                body: f[7].trim().into(),
             })
         })
         .collect();
@@ -703,15 +743,15 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         .or_else(|| commits.last().map(|c| c.author.clone()))
         .unwrap_or_else(|| "you".into());
     let title = if commits.len() == 1 { commits[0].subject.clone() } else { humanize_branch(&head_name) };
-    let body = pr_template(git, &base_sha)
+    // GitHub reads the PR template and CODEOWNERS from the base branch.
+    let base_modes = tree_modes(git, &base_sha, &[&PR_TEMPLATES[..], &[PR_TEMPLATE_DIR], &CODEOWNERS[..]].concat());
+    let body = pr_template(git, &base_sha, &base_modes)
         .or_else(|| (commits.len() == 1).then(|| commits[0].body.clone()))
         .unwrap_or_default();
 
-    let editorconfig = blob_text(git, &head_sha, ".editorconfig");
-    // GitHub reads CODEOWNERS from the base branch.
-    let codeowners = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
-        .iter()
-        .find_map(|p| blob_text(git, &base_sha, p).map(|t| (p.to_string(), t)));
+    let editorconfig = blob_text(git, &head_sha, &tree_modes(git, &head_sha, &[".editorconfig"]), ".editorconfig");
+    let codeowners =
+        CODEOWNERS.iter().find_map(|p| blob_text(git, &base_sha, &base_modes, p).map(|t| (p.to_string(), t)));
     // Committed changes only: uncommitted work is not part of the merge.
     let conflicts = if range.from.is_none() && !opts.uncommitted { merge_conflicts(git, &base_sha, &head_sha) } else { None };
     let snapshot = Snapshot {
@@ -719,7 +759,6 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
             name: repo_name,
             owner,
             root: git.root.to_string_lossy().into_owned(),
-            remote_url,
             host,
         },
         base: RefInfo { reference: base_ref, name: base_name, sha: base_sha },
@@ -738,7 +777,6 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         codeowners,
         conflicts,
         existing_pr: None,
-        generated_at: now_rfc3339(),
     };
     Ok(Resolved { snapshot, ends, remote })
 }
@@ -763,23 +801,23 @@ fn co_authors(trailers: &str) -> Vec<String> {
 /// Uses `git merge-tree --write-tree` (git 2.38+), which does not touch the work tree or index;
 /// the objects it writes go to a throwaway object directory, so the repository stays unchanged.
 fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
-    type Cache = std::sync::Mutex<std::collections::HashMap<(String, String), Option<Vec<String>>>>;
+    type Cache = std::sync::Mutex<HashMap<(String, String), Option<Vec<String>>>>;
     static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = (base.to_string(), head.to_string());
     if let Some(hit) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
         return hit;
     }
-    let objects = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "objects"])?;
-    let scratch = git.line(&["rev-parse", "--path-format=absolute", "--git-path", crate::STATE_DIR])?;
-    std::fs::create_dir_all(&scratch).ok()?;
-    remove_stale_merge_objects(std::path::Path::new(&scratch));
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let paths = git.run(&["rev-parse", "--path-format=absolute", "--git-path", "objects", "--git-path", crate::STATE_DIR]).ok()?;
+    let mut paths = paths.lines().map(str::trim);
+    let (objects, scratch) = (paths.next()?, Path::new(paths.next()?));
+    if !Path::new(objects).is_absolute() || !scratch.is_absolute() {
+        return None;
+    }
+    std::fs::create_dir_all(scratch).ok()?;
+    remove_stale_merge_objects(scratch);
     // Private, fresh directory inside the repository's git dir (not a shared temp dir).
-    let tmp = std::path::Path::new(&scratch).join(format!("merge-objects-{}-{nanos}", std::process::id()));
+    let tmp = scratch.join(crate::unique_name("merge-objects"));
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
@@ -787,7 +825,7 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
     // Alternates are separated by ':' (';' on Windows); a C-quoted entry may contain them.
     let quote = |p: &str| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""));
     let sep = if cfg!(windows) { ";" } else { ":" };
-    let mut alternates = std::ffi::OsString::from(quote(&objects));
+    let mut alternates = std::ffi::OsString::from(quote(objects));
     // Kept as an OsString: an existing value need not be UTF-8.
     if let Some(existing) = std::env::var_os("GIT_ALTERNATE_OBJECT_DIRECTORIES") {
         if !existing.is_empty() {
@@ -799,7 +837,7 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
     cmd.env("GIT_OBJECT_DIRECTORY", &tmp)
         .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
         .args(["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head]);
-    let out = crate::proc::run(cmd, None, std::time::Duration::from_secs(30));
+    let out = crate::proc::run(cmd, None, Duration::from_secs(30));
     let _ = std::fs::remove_dir_all(&tmp);
     let out = out.ok()?;
     if out.timed_out {
@@ -838,7 +876,7 @@ fn parse_merge_tree(code: Option<i32>, stdout: &str) -> Option<Vec<String>> {
 
 /// Throwaway object directories that an interrupted run left behind (older than an hour, so a
 /// merge check running right now in another gh-prv-local is never touched).
-fn remove_stale_merge_objects(scratch: &std::path::Path) {
+fn remove_stale_merge_objects(scratch: &Path) {
     let Ok(entries) = std::fs::read_dir(scratch) else { return };
     for e in entries.flatten() {
         let old = e
@@ -846,7 +884,7 @@ fn remove_stale_merge_objects(scratch: &std::path::Path) {
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.elapsed().ok())
-            .is_some_and(|age| age > std::time::Duration::from_secs(3600));
+            .is_some_and(|age| age > Duration::from_secs(3600));
         if old && e.file_name().to_string_lossy().starts_with("merge-objects-") {
             let _ = std::fs::remove_dir_all(e.path());
         }
@@ -856,17 +894,34 @@ fn remove_stale_merge_objects(scratch: &std::path::Path) {
 fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
     let (a, b) = (ends.a.as_str(), ends.b.as_str());
     // Like github.com: the stored content, never a local external diff or textconv program.
-    let base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/"];
-    let raw = git.bytes(&[&base[..], &["--raw", "-z", "--no-abbrev", a, b]].concat())?;
-    let entries = parse_raw(&raw);
-    let num = parse_numstat(&git.bytes(&[&base[..], &["--numstat", "-z", a, b]].concat())?);
-    let num_w = parse_numstat(&git.bytes(&[&base[..], &["--numstat", "-z", "--ignore-all-space", a, b]].concat())?);
-    let patch = String::from_utf8_lossy(&git.bytes(&[&base[..], &["--unified=3", a, b]].concat())?).into_owned();
-    let patch_w =
-        String::from_utf8_lossy(&git.bytes(&[&base[..], &["--unified=3", "--ignore-all-space", a, b]].concat())?)
-            .into_owned();
-    let chunks = assign(&entries, split_patch(&patch));
-    let chunks_w = assign(&entries, split_patch(&patch_w));
+    // Each pass prints the numstat, an empty field, then the patch.
+    let diff = |extra: &[&str]| {
+        let base = [
+            "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/",
+            "-z", "--numstat", "--patch", "--unified=3",
+        ];
+        git.bytes(&[&base[..], extra, &[a, b]].concat())
+    };
+    // The raw entries come from the as-is pass: `--ignore-all-space` leaves out whitespace-only files.
+    let as_is = || diff(&["--raw", "--no-abbrev"]);
+    let ignore_space = || diff(&["--ignore-all-space"]);
+    let (out, out_w) = if git.partial {
+        // One after the other, so only the first pass fetches the missing blobs.
+        (as_is(), ignore_space())
+    } else {
+        std::thread::scope(|s| {
+            let w = s.spawn(ignore_space);
+            (as_is(), w.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+        })
+    };
+    let (out, out_w) = (out?, out_w?);
+    let mut fields = Fields::new(&out);
+    let entries = parse_raw(&mut fields);
+    let num = parse_numstat(&mut fields);
+    let chunks = assign(&entries, split_patch(&String::from_utf8_lossy(fields.rest())));
+    let mut fields_w = Fields::new(&out_w);
+    let num_w = parse_numstat(&mut fields_w);
+    let chunks_w = assign(&entries, split_patch(&String::from_utf8_lossy(fields_w.rest())));
     let attrs = generated_attrs(git, &entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>());
 
     let mut files = vec![];
@@ -933,10 +988,12 @@ pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side
             git.bytes(&["show", &format!("{treeish}:{path}")]).ok()?
         }
     };
-    if bytes.len() > MAX_BLOB_BYTES || bytes.iter().take(8000).any(|b| *b == 0) {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    is_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A blob shown as text: within the size limit, and no NUL in its first 8000 bytes (git's binary test).
+fn is_text(bytes: &[u8]) -> bool {
+    bytes.len() <= MAX_BLOB_BYTES && !bytes.iter().take(8000).any(|b| *b == 0)
 }
 
 /// Reads many blobs with one `git cat-file --batch` process (used by `gh-prv-local export`).
@@ -947,22 +1004,8 @@ pub fn read_blobs(git: &Git, shas: &[String]) -> HashMap<String, String> {
     if shas.is_empty() {
         return out;
     }
-    let Ok(mut child) = git
-        .cmd()
-        .args(["cat-file", "--batch"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return out;
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        let input: String = shas.iter().map(|s| format!("{s}\n")).collect();
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(input.as_bytes());
-        });
-    }
+    let input: String = shas.iter().map(|s| format!("{s}\n")).collect();
+    let Some(mut child) = git.spawn_with_input(&["cat-file", "--batch"], input) else { return out };
     let Some(stdout) = child.stdout.take() else { return out };
     let mut r = BufReader::new(stdout);
     for _ in shas {
@@ -980,7 +1023,7 @@ pub fn read_blobs(git: &Git, shas: &[String]) -> HashMap<String, String> {
             break;
         }
         buf.pop();
-        if f[1] == "blob" && size <= MAX_BLOB_BYTES && !buf.iter().take(8000).any(|b| *b == 0) {
+        if f[1] == "blob" && is_text(&buf) {
             out.insert(f[0].to_string(), String::from_utf8_lossy(&buf).into_owned());
         }
     }
@@ -995,18 +1038,15 @@ pub fn changed_paths(files: &[FileDiff]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::TempDir;
 
-    /// An empty repository in a fresh temporary directory, with these `git config` settings.
-    fn scratch_repo(config: &[(&str, &str)]) -> (Git, PathBuf) {
-        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("prv-test-{}-{n}-{nanos}", std::process::id()));
-        std::fs::create_dir(&dir).unwrap();
-        let ok = Command::new("git").args(["init", "-q", "--template="]).arg(&dir).status().unwrap().success();
+    /// An empty repository in a fresh temporary directory (removed on drop), with these `git config` settings.
+    fn scratch_repo(config: &[(&str, &str)]) -> (Git, TempDir) {
+        let dir = TempDir::new();
+        let ok = Command::new("git").args(["init", "-q", "--template="]).arg(&*dir).status().unwrap().success();
         assert!(ok);
         for (key, value) in config {
-            let ok = Command::new("git").arg("-C").arg(&dir).args(["config", key, value]).status().unwrap().success();
+            let ok = Command::new("git").arg("-C").arg(&*dir).args(["config", key, value]).status().unwrap().success();
             assert!(ok);
         }
         (Git::discover(&dir).unwrap(), dir)
@@ -1014,32 +1054,27 @@ mod tests {
 
     #[test]
     fn origin_is_the_only_remote() {
-        let (git, dir) = scratch_repo(&[("remote.upstream.url", "https://example.com/a/b.git")]);
+        let (git, _dir) = scratch_repo(&[("remote.upstream.url", "https://example.com/a/b.git")]);
         assert_eq!(pick_remote(&git), None);
-        let (git2, dir2) = scratch_repo(&[
+        let (git2, _dir2) = scratch_repo(&[
             ("remote.upstream.url", "https://example.com/a/b.git"),
             ("remote.origin.url", "https://github.com/me/b.git"),
         ]);
         assert_eq!(pick_remote(&git2).as_deref(), Some("origin"));
-        let _ = std::fs::remove_dir_all(dir);
-        let _ = std::fs::remove_dir_all(dir2);
     }
 
     #[test]
     fn lazy_fetch_only_from_origin() {
-        let (plain, d1) = scratch_repo(&[]);
-        assert!(!plain.no_lazy_fetch);
-        let (from_origin, d2) = scratch_repo(&[("remote.origin.promisor", "true"), ("extensions.partialClone", "origin")]);
-        assert!(!from_origin.no_lazy_fetch);
-        let (other, d3) = scratch_repo(&[("remote.mirror.promisor", "true"), ("extensions.partialClone", "mirror")]);
-        assert!(other.no_lazy_fetch);
+        let (plain, _d1) = scratch_repo(&[]);
+        assert!(!plain.partial && !plain.no_lazy_fetch);
+        let (from_origin, _d2) = scratch_repo(&[("remote.origin.promisor", "true"), ("extensions.partialClone", "origin")]);
+        assert!(from_origin.partial && !from_origin.no_lazy_fetch);
+        let (other, _d3) = scratch_repo(&[("remote.mirror.promisor", "true"), ("extensions.partialClone", "mirror")]);
+        assert!(other.partial && other.no_lazy_fetch);
         // Any spelling git accepts as true.
-        let (yes, d4) = scratch_repo(&[("remote.mirror.promisor", "Yes")]);
-        assert!(yes.no_lazy_fetch);
+        let (yes, _d4) = scratch_repo(&[("remote.mirror.promisor", "Yes")]);
+        assert!(yes.partial && yes.no_lazy_fetch);
         assert!(other.cmd().get_envs().any(|(k, v)| k == "GIT_NO_LAZY_FETCH" && v == Some(std::ffi::OsStr::new("1"))));
-        for d in [d1, d2, d3, d4] {
-            let _ = std::fs::remove_dir_all(d);
-        }
     }
 
     #[test]
@@ -1113,8 +1148,25 @@ mod tests {
 
     #[test]
     fn numstat_rename() {
-        let m = parse_numstat(b"1\t2\t\0old.txt\0new.txt\0-\t-\timg.png\0");
+        let m = parse_numstat(&mut Fields::new(b"1\t2\t\0old.txt\0new.txt\0-\t-\timg.png\0"));
         assert_eq!(m.get("new.txt"), Some(&(1, 2, false)));
         assert_eq!(m.get("img.png"), Some(&(0, 0, true)));
+    }
+
+    #[test]
+    fn raw_numstat_and_patch_in_one_output() {
+        // `--raw --numstat --patch -z`: raw entries (a path may start with ':'), numstat, an empty field, the patch.
+        let out = b":100644 100644 aa bb R090\0:old\0new\0:000000 100644 00 cc A\0:b\0\
+1\t2\t\0:old\0new\03\t0\t:b\0\0diff --git a/:old b/new\n";
+        let mut fields = Fields::new(out);
+        let raw = parse_raw(&mut fields);
+        let paths: Vec<_> = raw.iter().map(|e| (e.old_path.as_deref(), e.path.as_str())).collect();
+        assert_eq!(paths, [(Some(":old"), "new"), (None, ":b")]);
+        let num = parse_numstat(&mut fields);
+        assert_eq!((num.get("new"), num.get(":b")), (Some(&(1, 2, false)), Some(&(3, 0, false))));
+        assert_eq!(fields.rest(), b"diff --git a/:old b/new\n");
+        // Without raw entries, and with no numstat lines (every change was whitespace).
+        let mut fields = Fields::new(b"\0");
+        assert!(parse_raw(&mut fields).is_empty() && parse_numstat(&mut fields).is_empty() && fields.rest().is_empty());
     }
 }
