@@ -164,7 +164,9 @@ await check('markdown: github.com allowlist, remote images become links, nothing
     '<a href="https://example.com/"><img src="https://tracker.example/in-link.png"></a> ![local](docs/shot.png)',
     '<video poster="https://tracker.example/v.png" src="https://tracker.example/v.mp4"></video><svg><image href="https://tracker.example/s.png"/></svg>',
     '<dialog open>fake</dialog><label for="x">fake label</label><form><button id="submit">x</button></form>',
-    '<div role="menu" class="ReviewOverlay" style="position:fixed" id="top" popover>menu</div><a href="javascript:alert(1)">js</a>',
+    '<div role="menu" class="ReviewOverlay" style="position:fixed" id="top" popover>menu</div><a href="javascript:alert(1)">js</a><a name="anchor">named</a>',
+    '![](//cdn.example/x.png) ![](data:image/png;base64,AAAA)',
+    '- [ ] loose one\n\n- [x] loose two',
     '- [x] done',
   ].join('\n\n')
   await page.evaluate((b) => {
@@ -172,24 +174,31 @@ await check('markdown: github.com allowlist, remote images become links, nothing
     window.__prv.getState().setTab('conversation')
   }, body)
   await settle(800)
-  const md = page.locator('.TimelineComment .markdown-body').first()
-  const r = await md.evaluate((el) => ({
-    imgs: el.querySelectorAll('img, video, svg, image, source').length,
-    blocked: [...el.querySelectorAll('.BlockedImage')].map((b) => `${b.tagName}:${b.getAttribute('href') ?? ''}:${b.textContent}`),
-    banned: el.querySelectorAll('dialog, label, form, button, [class]:not(.BlockedImage), [style], [popover]').length,
-    ids: [...el.querySelectorAll('[id]')].map((e) => e.id),
-    role: el.querySelector('[role]')?.getAttribute('role'),
-    js: [...el.querySelectorAll('a')].some((a) => (a.getAttribute('href') ?? '').startsWith('javascript')),
-    checkbox: el.querySelector('input[type=checkbox]')?.disabled,
-  }))
-  assert(r.imgs === 0, `media left: ${r.imgs}`)
-  assert(r.blocked.includes('A:https://tracker.example/p.gif?t=1:tracker'), `blocked image link: ${r.blocked}`)
-  assert(r.blocked.includes('SPAN::in-link.png') && r.blocked.includes('SPAN::local'), `inside a link / repository path: ${r.blocked}`)
-  assert(r.banned === 0, `page-like elements or attributes left: ${r.banned}`)
-  assert(r.ids.every((id) => id.startsWith('user-content-')), `ids: ${r.ids}`)
-  assert(r.role === 'menu' && !r.js && r.checkbox === true, JSON.stringify(r))
-  await page.evaluate(() => window.__prv.getState().setTab('files'))
-  await settle(600)
+  try {
+    const md = page.locator('.TimelineComment .markdown-body').first()
+    const r = await md.evaluate((el) => ({
+      imgs: el.querySelectorAll('img, video, svg, image, source').length,
+      blocked: [...el.querySelectorAll('.BlockedImage')].map((b) => `${b.tagName}:${b.getAttribute('href') ?? ''}:${b.textContent}`),
+      banned: el.querySelectorAll('dialog, label, form, button, [class]:not(.BlockedImage), [style], [popover]').length,
+      ids: el.querySelectorAll('[id]').length,
+      names: [...el.querySelectorAll('[name]')].map((e) => e.getAttribute('name')),
+      bullets: [...el.querySelectorAll('li')].filter((li) => li.querySelector('input') && getComputedStyle(li).listStyleType !== 'none').length,
+      role: el.querySelector('[role]')?.getAttribute('role'),
+      js: [...el.querySelectorAll('a')].some((a) => (a.getAttribute('href') ?? '').startsWith('javascript')),
+      checkbox: el.querySelector('input[type=checkbox]')?.disabled,
+    }))
+    assert(r.imgs === 0, `media left: ${r.imgs}`)
+    assert(r.blocked.includes('A:https://tracker.example/p.gif?t=1:tracker'), `blocked image link: ${r.blocked}`)
+    assert(r.blocked.includes('SPAN::in-link.png') && r.blocked.includes('SPAN::local'), `inside a link / repository path: ${r.blocked}`)
+    assert(r.banned === 0, `page-like elements or attributes left: ${r.banned}`)
+    assert(r.ids === 0 && r.names.length === 1 && r.names[0] === 'user-content-anchor', `ids ${r.ids}, names ${r.names}`)
+    assert(r.blocked.includes('A:https://cdn.example/x.png:x.png') && r.blocked.includes('SPAN::image'), `protocol-relative / data: ${r.blocked}`)
+    assert(r.bullets === 0, `task list items with a bullet: ${r.bullets}`)
+    assert(r.role === 'menu' && !r.js && r.checkbox === true, JSON.stringify(r))
+  } finally {
+    await page.evaluate(() => window.__prv.getState().setTab('files'))
+    await settle(600)
+  }
 })
 
 await check('commit picker opens and cancels', async () => {
@@ -229,12 +238,20 @@ await check('review draft survives closing the overlay', async () => {
   await page.getByRole('textbox', { name: 'Review body' }).fill('Draft kept')
   await page.keyboard.press('Escape')
   await settle()
-  await page.getByRole('button', { name: 'Submit review' }).click()
-  await settle()
-  assert((await page.getByRole('textbox', { name: 'Review body' }).inputValue()) === 'Draft kept', 'draft restored')
-  assert(await page.getByRole('radio', { name: 'Confirm' }).isDisabled(), 'confirm radio disabled')
-  await page.keyboard.press('Escape')
-  await settle()
+  const overlay = page.locator('.ReviewOverlay')
+  assert((await overlay.count()) === 0, 'Escape closes the review overlay')
+  // Reopened, Escape still closes it (Primer's handler, as on github.com), three times over.
+  for (let i = 0; i < 3; i++) {
+    await page.getByRole('button', { name: 'Submit review' }).click()
+    await settle()
+    if (i === 0) {
+      assert((await page.getByRole('textbox', { name: 'Review body' }).inputValue()) === 'Draft kept', 'draft restored')
+      assert(await page.getByRole('radio', { name: 'Confirm' }).isDisabled(), 'confirm radio disabled')
+    }
+    await page.keyboard.press('Escape')
+    await settle()
+    assert((await overlay.count()) === 0, `Escape closes the reopened overlay (${i + 1})`)
+  }
 })
 
 await check('submit a review: request changes with both comments', async () => {

@@ -10,11 +10,17 @@ import tauri from '../src-tauri/tauri.conf.json'
 const noEgress = {
   name: 'prv-no-egress',
   apply: 'build' as const,
-  transformIndexHtml: () => [
-    { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: tauri.app.security.csp }, injectTo: 'head-prepend' as const },
-    { tag: 'meta', attrs: { 'http-equiv': 'x-dns-prefetch-control', content: 'off' }, injectTo: 'head-prepend' as const },
-    { tag: 'meta', attrs: { name: 'referrer', content: 'no-referrer' }, injectTo: 'head-prepend' as const },
-  ],
+  // Right after <meta charset> (which must stay within the first 1024 bytes), before any script.
+  transformIndexHtml: (html: string) => {
+    const charset = '<meta charset="UTF-8" />'
+    if (!html.includes(charset)) throw new Error('prv-no-egress: <meta charset="UTF-8" /> not found in index.html')
+    const csp = tauri.app.security.csp.replace(/'/g, '&#39;')
+    return html.replace(
+      charset,
+      `${charset}\n    <meta http-equiv="Content-Security-Policy" content="${csp}">` +
+        '\n    <meta http-equiv="x-dns-prefetch-control" content="off">\n    <meta name="referrer" content="no-referrer">',
+    )
+  },
 }
 
 // Everything (JS, CSS, fonts, the highlighter worker and its WASM) is inlined

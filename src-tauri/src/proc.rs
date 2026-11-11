@@ -78,7 +78,9 @@ pub fn kill_descendants(child: &mut Child) {
         for _ in 0..8 {
             let procs = table();
             let mut found = false;
-            let mut queue = std::collections::VecDeque::from([child.id()]);
+            // From every process found so far, not just the root: a child whose parent exited
+            // before it was stopped now hangs off launchd but must still be followed.
+            let mut queue: std::collections::VecDeque<u32> = std::iter::once(child.id()).chain(all.iter().copied()).collect();
             let mut seen = std::collections::HashSet::new();
             while let Some(pid) = queue.pop_front() {
                 if !seen.insert(pid) {

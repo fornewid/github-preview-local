@@ -64,8 +64,8 @@ export function CopyButton({
 
 // github.com's sanitization allowlist (html-pipeline's SanitizationFilter): every other element
 // and attribute is dropped, so repository text (PR templates, commit messages) cannot pose as the
-// page: no dialog, label, form controls, class, style or SVG; `id` and `name` get github.com's
-// `user-content-` prefix. Task list checkboxes come from marked and stay read-only.
+// page: no dialog, label, form controls, class, style, id or SVG; `name` gets the `user-content-`
+// prefix. Task list checkboxes come from marked and stay read-only.
 const ALLOWED_TAGS = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'b', 'i', 'strong', 'em', 'a', 'pre', 'code', 'img', 'tt',
   'div', 'ins', 'del', 'sup', 'sub', 'p', 'ol', 'ul', 'table', 'thead', 'tbody', 'tfoot', 'blockquote',
@@ -105,6 +105,12 @@ function sanitize(html: string): string {
     for (const [attr, tags] of Object.entries(ONLY_ON)) {
       if (node.hasAttribute?.(attr) && !tags.includes(node.tagName)) node.removeAttribute(attr)
     }
+    // Still in DOMPurify's inert document: an <img> with a src must never reach the page's
+    // document, where it would start loading.
+    if (node.tagName === 'IMG') {
+      node.setAttribute('data-src', node.getAttribute('src') ?? '')
+      node.removeAttribute('src')
+    }
   }
   DOMPurify.addHook('uponSanitizeElement', onElement)
   DOMPurify.addHook('afterSanitizeAttributes', onAttributes)
@@ -136,14 +142,20 @@ function sanitize(html: string): string {
  * browser only when clicked; a relative path (a file in the repository) is just named.
  */
 function blockedImage(img: HTMLImageElement): Element {
-  const src = img.getAttribute('src') ?? ''
-  const remote = /^(?:https?:)?\/\//i.test(src)
-  const label = img.getAttribute('alt') || src.split(/[?#]/)[0]!.split('/').filter(Boolean).pop() || 'image'
+  // Protocol-relative (//host/x.png) means https here: the page itself is tauri: or file:.
+  // data: images are not shown either (github.com drops them).
+  const src = (img.getAttribute('data-src') ?? '').replace(/^\/\//, 'https://').replace(/^data:.*/is, '')
+  const remote = /^https?:\/\//i.test(src)
+  const label = img.getAttribute('alt') || (src && src.split(/[?#]/)[0]!.split('/').filter(Boolean).pop()) || 'image'
   const inLink = !!img.closest('a')
   const el = document.createElement(remote && !inLink ? 'a' : 'span')
   el.className = 'BlockedImage'
   el.textContent = label
-  el.title = remote ? `Image not loaded (prv loads nothing from other hosts): ${src}` : `Image in the repository: ${src}`
+  el.title = remote
+    ? `Image not loaded (prv loads nothing from other hosts): ${src}`
+    : src
+      ? `Image in the repository: ${src}`
+      : 'Image not shown'
   if (remote && !inLink) el.setAttribute('href', src)
   return el
 }

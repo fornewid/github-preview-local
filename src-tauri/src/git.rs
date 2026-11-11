@@ -58,6 +58,8 @@ impl Git {
                 "-c", "diff.algorithm=default",
                 "-c", "diff.interHunkContext=0",
                 "-c", "diff.relative=false",
+                // No gpg runs for signed commits (a keyserver lookup would leave the machine).
+                "-c", "log.showSignature=false",
             ])
             .stdin(Stdio::null());
         if self.no_lazy_fetch {
@@ -138,18 +140,47 @@ pub fn pick_remote(git: &Git) -> Option<String> {
 
 /// Whether a partial clone would fetch missing objects from a remote other than `origin`.
 fn foreign_promisor(git: &Git) -> bool {
-    let promisors = git.run(&["config", "--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
+    // --type=bool normalizes yes/on/1/TRUE and a key without a value to "true".
+    let promisors = git.run(&["config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
     let named = promisors.lines().filter_map(|l| {
         let (key, value) = l.split_once(' ')?;
         let name = key.strip_prefix("remote.")?.strip_suffix(".promisor")?;
-        matches!(value.trim(), "true" | "yes" | "on" | "1").then_some(name)
+        (value.trim() == "true").then_some(name)
     });
     let partial = git.line(&["config", "extensions.partialClone"]);
     named.chain(partial.as_deref()).any(|r| r != "origin")
 }
 
-/// The real host behind an SSH remote: `git@github-work:me/repo` uses an alias from
-/// ~/.ssh/config, which `ssh -G` resolves without connecting anywhere.
+/// The GitHub host of an SSH remote, for `gh`. The host in the URL wins when gh is logged in to it
+/// (`Host github.com` + `HostName ssh.github.com` is GitHub's SSH-over-443 setup); otherwise it
+/// may be an alias from ~/.ssh/config (`git@github-work:me/repo`), resolved by `ssh -G` without
+/// connecting anywhere.
+fn ssh_github_host(host: String) -> String {
+    let gh_knows = |h: &str| {
+        Command::new("gh")
+            .args(["auth", "token", "--hostname", h])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    if gh_knows(&host) {
+        return host;
+    }
+    match ssh_hostname(&host).map(|h| if h == "ssh.github.com" { "github.com".to_string() } else { h }) {
+        Some(real) if real != host => real,
+        _ => host,
+    }
+}
+
+/// `git version` is at least major.minor.
+fn git_at_least(git: &Git, major: u32, minor: u32) -> bool {
+    let v = git.line(&["version"]).unwrap_or_default();
+    let mut nums = v.split_whitespace().nth(2).unwrap_or_default().split('.').map(|n| n.parse::<u32>().unwrap_or(0));
+    (nums.next().unwrap_or(0), nums.next().unwrap_or(0)) >= (major, minor)
+}
+
 fn ssh_hostname(alias: &str) -> Option<String> {
     if alias.starts_with('-') {
         return None;
@@ -218,7 +249,10 @@ fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(S
             return Ok((b.to_string(), b.to_string()));
         }
     }
-    Err("could not determine the base branch; pass --base <branch>".into())
+    Err(match remote {
+        Some(_) => "could not determine the base branch; pass --base <branch>".into(),
+        None => "could not determine the base branch: there is no `origin` remote (the only remote prv uses) and no local main/master branch; pass --base <branch>".into(),
+    })
 }
 
 /// Snapshot of the working tree (tracked + untracked, honoring .gitignore) as a tree object,
@@ -552,12 +586,17 @@ pub struct Resolved {
 
 pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved, String> {
     let mut warnings = vec![];
+    if git.no_lazy_fetch && !git_at_least(git, 2, 44) {
+        warnings.push(
+            "This partial clone gets missing objects from a remote other than `origin`; git before 2.44 cannot be kept from fetching them while prv reads the diff.".into(),
+        );
+    }
     let remote = pick_remote(git);
     let remote_url = remote.as_deref().and_then(|r| git.line(&["remote", "get-url", r])).map(|u| strip_userinfo(&u));
     let (host, owner, name) = remote_url.as_deref().map(parse_remote).unwrap_or((None, None, None));
     let ssh = remote_url.as_deref().is_some_and(|u| !u.contains("://") || u.starts_with("ssh://") || u.starts_with("git+ssh://"));
     let host = match host {
-        Some(h) if ssh => Some(ssh_hostname(&h).unwrap_or(h)),
+        Some(h) if ssh => Some(ssh_github_host(h)),
         h => h,
     };
     let repo_name = name.unwrap_or_else(|| {
@@ -651,7 +690,13 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         warnings.push("You have uncommitted changes that are not shown. Run `prv --uncommitted` to include them.".into());
     }
 
-    let files = diff_files(git, &ends)?;
+    let files = diff_files(git, &ends).map_err(|e| {
+        if git.no_lazy_fetch {
+            format!("{e}\n\nThis partial clone gets missing objects from a remote other than `origin`, which prv does not contact. Fetch them first (for example `git fetch` from that remote), then reopen prv.")
+        } else {
+            e
+        }
+    })?;
 
     let author = git
         .line(&["config", "user.name"])
@@ -953,9 +998,11 @@ mod tests {
 
     /// An empty repository in a fresh temporary directory, with these `git config` settings.
     fn scratch_repo(config: &[(&str, &str)]) -> (Git, PathBuf) {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("prv-test-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::env::temp_dir().join(format!("prv-test-{}-{n}-{nanos}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
         let ok = Command::new("git").args(["init", "-q", "--template="]).arg(&dir).status().unwrap().success();
         assert!(ok);
         for (key, value) in config {
@@ -986,8 +1033,11 @@ mod tests {
         assert!(!from_origin.no_lazy_fetch);
         let (other, d3) = scratch_repo(&[("remote.mirror.promisor", "true"), ("extensions.partialClone", "mirror")]);
         assert!(other.no_lazy_fetch);
+        // Any spelling git accepts as true.
+        let (yes, d4) = scratch_repo(&[("remote.mirror.promisor", "Yes")]);
+        assert!(yes.no_lazy_fetch);
         assert!(other.cmd().get_envs().any(|(k, v)| k == "GIT_NO_LAZY_FETCH" && v == Some(std::ffi::OsStr::new("1"))));
-        for d in [d1, d2, d3] {
+        for d in [d1, d2, d3, d4] {
             let _ = std::fs::remove_dir_all(d);
         }
     }

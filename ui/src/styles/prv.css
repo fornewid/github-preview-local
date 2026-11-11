@@ -1891,11 +1891,13 @@ h3 {
   padding: 6px 13px;
   border: 1px solid var(--borderColor-default);
 }
-/* github.com's task lists: no bullet, the checkbox hangs where the bullet was. */
-.markdown-body li:has(> input[type='checkbox']:first-child) {
+/* github.com's task lists (tight or loose): no bullet, the checkbox hangs where the bullet was. */
+.markdown-body li:has(> input[type='checkbox']:first-child),
+.markdown-body li:has(> p:first-child > input[type='checkbox']:first-child) {
   list-style-type: none;
 }
-.markdown-body li > input[type='checkbox']:first-child {
+.markdown-body li > input[type='checkbox']:first-child,
+.markdown-body li > p:first-child > input[type='checkbox']:first-child {
   margin: 0 0.2em 0.25em -1.4em;
   vertical-align: middle;
 }
