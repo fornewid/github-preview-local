@@ -114,6 +114,7 @@ else
   cat > "$WORK/bin/gh" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >> "$PRV_GH_LOG"
+printf 'GH_TELEMETRY=%s DO_NOT_TRACK=%s GH_NO_UPDATE_NOTIFIER=%s\n' "$GH_TELEMETRY" "$DO_NOT_TRACK" "$GH_NO_UPDATE_NOTIFIER" >> "$PRV_GH_LOG.env"
 case "$1 $2" in
   "auth status") echo "github.com: logged in (prv selftest)"; exit 0 ;;
   "pr list") echo "[]"; exit 0 ;;
@@ -210,6 +211,8 @@ if (real) {
   check('Confirm: checked gh login first', /^auth status --hostname github\.com$/m.test(gh), gh)
   check('Confirm: looked for an open pull request', new RegExp(`^pr list -R github\\.com/${repo} --head ${branch} --state open`, 'm').test(gh), gh)
   check('Confirm: gh pr create into main', new RegExp(`^pr create -R github\\.com/${repo} --base main --head ${branch} --title .+ --body-file -$`, 'm').test(gh), gh)
+  const env = read(`${work}/gh.log.env`).trim().split('\n')
+  check('Confirm: gh ran without telemetry or update checks', env.length >= 3 && env.every((l) => l === 'GH_TELEMETRY=false DO_NOT_TRACK=1 GH_NO_UPDATE_NOTIFIER=1'), env.join(' | '))
 }
 console.log(url)
 process.exit(failed ? 1 : 0)

@@ -128,7 +128,7 @@ pub fn publish(git: &Git, remote: Option<&str>, s: &Snapshot, req: &PublishReque
 
     // Push exactly the reviewed commit, even if the branch moved meanwhile.
     let mut push = git.cmd();
-    push.args(["push", remote, &format!("{}:refs/heads/{branch}", s.head.sha)]);
+    push.args(["push", "--recurse-submodules=no", remote, &format!("{}:refs/heads/{branch}", s.head.sha)]);
     run(push, &mut log, None, PUSH_TIMEOUT)?;
     // What `push -u` would do; works without a remote-tracking ref (single-branch / shallow clones).
     for (key, value) in [("remote", remote.to_string()), ("merge", format!("refs/heads/{branch}"))] {

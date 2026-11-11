@@ -62,26 +62,93 @@ export function CopyButton({
   )
 }
 
-function sanitize(html: string) {
-  DOMPurify.addHook('uponSanitizeElement', (node, data) => {
+// github.com's sanitization allowlist (html-pipeline's SanitizationFilter): every other element
+// and attribute is dropped, so repository text (PR templates, commit messages) cannot pose as the
+// page: no dialog, label, form controls, class, style or SVG; `id` and `name` get github.com's
+// `user-content-` prefix. Task list checkboxes come from marked and stay read-only.
+const ALLOWED_TAGS = [
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'b', 'i', 'strong', 'em', 'a', 'pre', 'code', 'img', 'tt',
+  'div', 'ins', 'del', 'sup', 'sub', 'p', 'ol', 'ul', 'table', 'thead', 'tbody', 'tfoot', 'blockquote',
+  'dl', 'dt', 'dd', 'kbd', 'q', 'samp', 'var', 'hr', 'ruby', 'rt', 'rp', 'li', 'tr', 'td', 'th', 's',
+  'strike', 'summary', 'details', 'caption', 'figure', 'figcaption', 'abbr', 'bdo', 'cite', 'dfn',
+  'mark', 'small', 'span', 'time', 'wbr', 'input',
+]
+const ALLOWED_ATTR = [
+  'abbr', 'accept', 'accept-charset', 'accesskey', 'action', 'align', 'alt', 'aria-describedby',
+  'aria-hidden', 'aria-label', 'aria-labelledby', 'axis', 'border', 'cellpadding', 'cellspacing', 'char',
+  'charoff', 'charset', 'checked', 'clear', 'cols', 'colspan', 'color', 'compact', 'coords', 'datetime',
+  'dir', 'disabled', 'enctype', 'for', 'frame', 'headers', 'height', 'hreflang', 'hspace', 'ismap',
+  'label', 'lang', 'maxlength', 'media', 'method', 'multiple', 'name', 'nohref', 'noshade', 'nowrap',
+  'open', 'progress', 'prompt', 'readonly', 'rel', 'rev', 'role', 'rows', 'rowspan', 'rules', 'scope',
+  'selected', 'shape', 'size', 'span', 'start', 'summary', 'tabindex', 'target', 'title', 'type',
+  'usemap', 'valign', 'value', 'vspace', 'width', 'itemprop',
+  // Only on some elements (checked in the hook below).
+  'href', 'src', 'longdesc', 'cite', 'itemscope', 'itemtype',
+]
+const ONLY_ON: Record<string, string[]> = {
+  href: ['A'],
+  src: ['IMG'],
+  longdesc: ['IMG'],
+  cite: ['BLOCKQUOTE', 'DEL', 'INS', 'Q'],
+  itemscope: ['DIV'],
+  itemtype: ['DIV'],
+}
+
+function sanitize(html: string): string {
+  const onElement = (node: Node, data: { tagName: string }) => {
     if (data.tagName !== 'input') return
     const el = node as Element
     if (el.getAttribute('type') !== 'checkbox') el.remove()
     else el.setAttribute('disabled', '')
-  })
+  }
+  const onAttributes = (node: Element) => {
+    for (const [attr, tags] of Object.entries(ONLY_ON)) {
+      if (node.hasAttribute?.(attr) && !tags.includes(node.tagName)) node.removeAttribute(attr)
+    }
+  }
+  DOMPurify.addHook('uponSanitizeElement', onElement)
+  DOMPurify.addHook('afterSanitizeAttributes', onAttributes)
+  let fragment: DocumentFragment
   try {
-    return DOMPurify.sanitize(html, {
-      FORBID_ATTR: ['style', 'class', 'id'],
-      FORBID_TAGS: ['style', 'form', 'button', 'select', 'textarea', 'iframe'],
+    fragment = DOMPurify.sanitize(html, {
+      ALLOWED_TAGS,
+      ALLOWED_ATTR,
+      ALLOW_ARIA_ATTR: false,
+      ALLOW_DATA_ATTR: false,
+      SANITIZE_NAMED_PROPS: true,
+      // github.com: http(s), mailto and relative URLs only.
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+      RETURN_DOM_FRAGMENT: true,
     })
   } finally {
-    DOMPurify.removeHook('uponSanitizeElement')
+    DOMPurify.removeHook('uponSanitizeElement', onElement)
+    DOMPurify.removeHook('afterSanitizeAttributes', onAttributes)
   }
+  for (const img of fragment.querySelectorAll('img')) img.replaceWith(blockedImage(img))
+  const out = document.createElement('div')
+  out.append(fragment)
+  return out.innerHTML
+}
+
+/**
+ * prv loads nothing from other hosts (github.com shows images through its camo proxy; prv would
+ * have to ask the image's host directly). An image becomes a link to it instead, which opens in the
+ * browser only when clicked; a relative path (a file in the repository) is just named.
+ */
+function blockedImage(img: HTMLImageElement): Element {
+  const src = img.getAttribute('src') ?? ''
+  const remote = /^(?:https?:)?\/\//i.test(src)
+  const label = img.getAttribute('alt') || src.split(/[?#]/)[0]!.split('/').filter(Boolean).pop() || 'image'
+  const inLink = !!img.closest('a')
+  const el = document.createElement(remote && !inLink ? 'a' : 'span')
+  el.className = 'BlockedImage'
+  el.textContent = label
+  el.title = remote ? `Image not loaded (prv loads nothing from other hosts): ${src}` : `Image in the repository: ${src}`
+  if (remote && !inLink) el.setAttribute('href', src)
+  return el
 }
 
 export function Markdown({ source, className = '' }: { source: string; className?: string }) {
-  // Repository-controlled text (PR templates, commit messages): no inline styles, page classes or
-  // ids and no form controls (except task list checkboxes), so nothing can pose as the page's UI.
   const html = useMemo(() => sanitize(marked.parse(source, { async: false, gfm: true, breaks: true }) as string), [source])
   return <div className={`markdown-body ${className}`} dangerouslySetInnerHTML={{ __html: html }} />
 }

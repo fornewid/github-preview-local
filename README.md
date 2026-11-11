@@ -20,7 +20,14 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   (fetched first), rename detection, `.gitattributes` `linguist-generated`, lock files
   collapsed, binary / submodule / mode changes, CRLF, *No newline at end of file*.
 - **No web server**: a native window (system WebView via Tauri) talks to the CLI over IPC.
-  Nothing listens on a port, nothing is sent anywhere until you press *Confirm*.
+  Nothing listens on a port.
+- **Talks to `origin` only**: prv fetches the base branch from `origin` (skip with `--no-fetch`),
+  looks up an open pull request on origin's GitHub host when the merge panel opens, and pushes and
+  opens the pull request when you press *Confirm*. Nothing else leaves the machine: no other
+  remote, no submodule hosts, no GitHub CLI telemetry or update checks, and images in pull request
+  descriptions or commit messages are not loaded (they show as links, unlike github.com, which
+  serves them through its image proxy). Local checks run your own commands, which may use the
+  network like they would in a terminal.
 - **Made for AI-assisted coding**: `prv` blocks until you submit a review and prints it to stdout
   (Markdown or JSON) with file, line, code snippet and comment — Claude Code acts on it directly.
 

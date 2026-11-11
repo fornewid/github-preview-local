@@ -431,17 +431,9 @@ function ReviewButton() {
   const open = useStore((st) => st.reviewOpen)
   const openReview = useStore((st) => st.openReview)
   const setOpen = (v: boolean) => openReview(v ? undefined : null)
-  // Primer's own Escape handling does not always fire after the overlay was reopened.
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return
-      // An open menu (e.g. the editor's overflow menu) closes first.
-      if (!document.querySelector('[role="menu"]')) openReview(null)
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
-  }, [open, openReview])
+  // Escape is Primer's, as on github.com: the innermost open layer (a tooltip, a menu) closes
+  // first, then the overlay. The form takes focus when it opens (MarkdownEditor autoFocus), so the
+  // anchor's tooltip never holds the first Escape.
   return (
     <AnchoredOverlay
       open={open}

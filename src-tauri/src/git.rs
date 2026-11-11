@@ -20,6 +20,9 @@ const MAX_BLOB_BYTES: usize = 5 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct Git {
     pub root: PathBuf,
+    /// A partial clone whose missing objects would come from a remote other than `origin`:
+    /// git may not fetch them on demand (prv talks to `origin` only).
+    no_lazy_fetch: bool,
 }
 
 impl Git {
@@ -37,7 +40,9 @@ impl Git {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        Ok(Git { root: PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()) })
+        let mut git = Git { root: PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()), no_lazy_fetch: false };
+        git.no_lazy_fetch = foreign_promisor(&git);
+        Ok(git)
     }
 
     pub fn cmd(&self) -> Command {
@@ -55,6 +60,9 @@ impl Git {
                 "-c", "diff.relative=false",
             ])
             .stdin(Stdio::null());
+        if self.no_lazy_fetch {
+            c.env("GIT_NO_LAZY_FETCH", "1");
+        }
         c
     }
 
@@ -121,14 +129,39 @@ pub struct DiffEnds {
     pub b: String,
 }
 
+/// The only remote prv talks to (fetching the base, pushing, the pull request on its GitHub host):
+/// `origin`. Without one, the base is compared as it is locally and Confirm is unavailable.
 pub fn pick_remote(git: &Git) -> Option<String> {
     let remotes = git.run(&["remote"]).ok()?;
-    let list: Vec<&str> = remotes.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
-    if list.contains(&"origin") {
-        Some("origin".into())
-    } else {
-        list.first().map(|s| s.to_string())
+    remotes.lines().map(str::trim).any(|r| r == "origin").then(|| "origin".to_string())
+}
+
+/// Whether a partial clone would fetch missing objects from a remote other than `origin`.
+fn foreign_promisor(git: &Git) -> bool {
+    let promisors = git.run(&["config", "--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
+    let named = promisors.lines().filter_map(|l| {
+        let (key, value) = l.split_once(' ')?;
+        let name = key.strip_prefix("remote.")?.strip_suffix(".promisor")?;
+        matches!(value.trim(), "true" | "yes" | "on" | "1").then_some(name)
+    });
+    let partial = git.line(&["config", "extensions.partialClone"]);
+    named.chain(partial.as_deref()).any(|r| r != "origin")
+}
+
+/// The real host behind an SSH remote: `git@github-work:me/repo` uses an alias from
+/// ~/.ssh/config, which `ssh -G` resolves without connecting anywhere.
+fn ssh_hostname(alias: &str) -> Option<String> {
+    if alias.starts_with('-') {
+        return None;
     }
+    let out = Command::new("ssh").args(["-G", alias]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("hostname ").map(|h| h.trim().to_string()))
+        .filter(|h| !h.is_empty())
 }
 
 /// Parses `https://host/owner/repo(.git)`, `git@host:owner/repo.git` and `ssh://git@host/owner/repo`.
@@ -522,6 +555,11 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     let remote = pick_remote(git);
     let remote_url = remote.as_deref().and_then(|r| git.line(&["remote", "get-url", r])).map(|u| strip_userinfo(&u));
     let (host, owner, name) = remote_url.as_deref().map(parse_remote).unwrap_or((None, None, None));
+    let ssh = remote_url.as_deref().is_some_and(|u| !u.contains("://") || u.starts_with("ssh://") || u.starts_with("git+ssh://"));
+    let host = match host {
+        Some(h) if ssh => Some(ssh_hostname(&h).unwrap_or(h)),
+        h => h,
+    };
     let repo_name = name.unwrap_or_else(|| {
         git.root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "repository".into())
     });
@@ -543,7 +581,12 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         if let Some(rm) = remote.as_deref() {
             if base_ref.starts_with(&format!("{rm}/")) {
                 let spec = format!("+refs/heads/{base_name}:refs/remotes/{rm}/{base_name}");
-                if let Err(e) = git.run_timeout(&["fetch", "--quiet", "--no-tags", rm, &spec], Duration::from_secs(30)) {
+                // The base branch from origin only: no submodules (their hosts), no bundle URIs.
+                let fetch = [
+                    "-c", "transfer.bundleURI=false", "-c", "fetch.bundleURI=", "fetch", "--quiet", "--no-tags",
+                    "--no-recurse-submodules", rm, spec.as_str(),
+                ];
+                if let Err(e) = git.run_timeout(&fetch, Duration::from_secs(30)) {
                     warnings.push(format!(
                         "Could not fetch `{base_ref}` ({e}); comparing against the last fetched state. Use --no-fetch to skip fetching."
                     ));
@@ -685,6 +728,7 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
     let objects = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "objects"])?;
     let scratch = git.line(&["rev-parse", "--path-format=absolute", "--git-path", "prv"])?;
     std::fs::create_dir_all(&scratch).ok()?;
+    remove_stale_merge_objects(std::path::Path::new(&scratch));
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -698,10 +742,12 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
     // Alternates are separated by ':' (';' on Windows); a C-quoted entry may contain them.
     let quote = |p: &str| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""));
     let sep = if cfg!(windows) { ";" } else { ":" };
-    let mut alternates = quote(&objects);
-    if let Ok(existing) = std::env::var("GIT_ALTERNATE_OBJECT_DIRECTORIES") {
+    let mut alternates = std::ffi::OsString::from(quote(&objects));
+    // Kept as an OsString: an existing value need not be UTF-8.
+    if let Some(existing) = std::env::var_os("GIT_ALTERNATE_OBJECT_DIRECTORIES") {
         if !existing.is_empty() {
-            alternates = format!("{alternates}{sep}{existing}");
+            alternates.push(sep);
+            alternates.push(existing);
         }
     }
     let mut cmd = git.cmd();
@@ -715,29 +761,57 @@ fn merge_conflicts(git: &Git, base: &str, head: &str) -> Option<Vec<String>> {
         // Not cached: a slow moment should not stick for the whole session.
         return None;
     }
-    let result = {
-        match out.code {
-            // Output: the tree id, then (on conflicts) the conflicted paths, NUL separated.
-            Some(0) => Some(vec![]),
-            Some(1) => {
-                let mut parts = out.stdout.split('\0').filter(|p| !p.is_empty());
-                parts.next();
-                let mut paths: Vec<String> = parts.map(|p| p.to_string()).collect();
-                paths.dedup();
-                Some(paths)
-            }
-            _ => None,
+    let result = parse_merge_tree(out.code, &out.stdout);
+    // Only answers are cached; "unknown" (an error) is asked again next time.
+    if result.is_some() {
+        if let Ok(mut c) = cache.lock() {
+            c.insert(key, result.clone());
         }
-    };
-    if let Ok(mut c) = cache.lock() {
-        c.insert(key, result.clone());
     }
     result
 }
 
+/// `git merge-tree --write-tree --name-only -z` output: the tree id, then (exit code 1) the
+/// conflicted paths, NUL separated. Anything else is an error, e.g. exit code 1 with no tree id
+/// for "not something we can merge": unknown, never "no conflicts".
+fn parse_merge_tree(code: Option<i32>, stdout: &str) -> Option<Vec<String>> {
+    let mut parts = stdout.split('\0').filter(|p| !p.is_empty());
+    let tree = parts.next()?.trim();
+    if !matches!(tree.len(), 40 | 64) || !tree.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    match code {
+        Some(0) => Some(vec![]),
+        Some(1) => {
+            let mut paths: Vec<String> = parts.map(|p| p.to_string()).collect();
+            paths.dedup();
+            Some(paths)
+        }
+        _ => None,
+    }
+}
+
+/// Throwaway object directories that an interrupted run left behind (older than an hour, so a
+/// merge check running right now in another prv is never touched).
+fn remove_stale_merge_objects(scratch: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(scratch) else { return };
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > std::time::Duration::from_secs(3600));
+        if old && e.file_name().to_string_lossy().starts_with("merge-objects-") {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
     let (a, b) = (ends.a.as_str(), ends.b.as_str());
-    let base = ["diff", "--no-color", "--no-ext-diff", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/"];
+    // Like github.com: the stored content, never a local external diff or textconv program.
+    let base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/"];
     let raw = git.bytes(&[&base[..], &["--raw", "-z", "--no-abbrev", a, b]].concat())?;
     let entries = parse_raw(&raw);
     let num = parse_numstat(&git.bytes(&[&base[..], &["--numstat", "-z", a, b]].concat())?);
@@ -876,6 +950,61 @@ pub fn changed_paths(files: &[FileDiff]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An empty repository in a fresh temporary directory, with these `git config` settings.
+    fn scratch_repo(config: &[(&str, &str)]) -> (Git, PathBuf) {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("prv-test-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = Command::new("git").args(["init", "-q", "--template="]).arg(&dir).status().unwrap().success();
+        assert!(ok);
+        for (key, value) in config {
+            let ok = Command::new("git").arg("-C").arg(&dir).args(["config", key, value]).status().unwrap().success();
+            assert!(ok);
+        }
+        (Git::discover(&dir).unwrap(), dir)
+    }
+
+    #[test]
+    fn origin_is_the_only_remote() {
+        let (git, dir) = scratch_repo(&[("remote.upstream.url", "https://example.com/a/b.git")]);
+        assert_eq!(pick_remote(&git), None);
+        let (git2, dir2) = scratch_repo(&[
+            ("remote.upstream.url", "https://example.com/a/b.git"),
+            ("remote.origin.url", "https://github.com/me/b.git"),
+        ]);
+        assert_eq!(pick_remote(&git2).as_deref(), Some("origin"));
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir2);
+    }
+
+    #[test]
+    fn lazy_fetch_only_from_origin() {
+        let (plain, d1) = scratch_repo(&[]);
+        assert!(!plain.no_lazy_fetch);
+        let (from_origin, d2) = scratch_repo(&[("remote.origin.promisor", "true"), ("extensions.partialClone", "origin")]);
+        assert!(!from_origin.no_lazy_fetch);
+        let (other, d3) = scratch_repo(&[("remote.mirror.promisor", "true"), ("extensions.partialClone", "mirror")]);
+        assert!(other.no_lazy_fetch);
+        assert!(other.cmd().get_envs().any(|(k, v)| k == "GIT_NO_LAZY_FETCH" && v == Some(std::ffi::OsStr::new("1"))));
+        for d in [d1, d2, d3] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn merge_tree_output() {
+        let tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        assert_eq!(parse_merge_tree(Some(0), &format!("{tree}\0")), Some(vec![]));
+        assert_eq!(
+            parse_merge_tree(Some(1), &format!("{tree}\0a.txt\0a.txt\0b.txt\0")),
+            Some(vec!["a.txt".to_string(), "b.txt".to_string()])
+        );
+        // git 2.54: exit code 1 and no tree id when an object is missing. Unknown, not "clean".
+        assert_eq!(parse_merge_tree(Some(1), ""), None);
+        assert_eq!(parse_merge_tree(Some(1), "merge: not something we can merge\n"), None);
+        assert_eq!(parse_merge_tree(Some(128), ""), None);
+    }
 
     #[test]
     fn co_author_trailers() {

@@ -49,42 +49,57 @@ pub fn kill_group(pid: u32) {
 
 /// Kills a process and all its descendants without relying on process groups
 /// (used for git/gh, which must stay in the terminal's group for prompts).
-/// Each process is frozen (SIGSTOP) before its children are listed, so
-/// nothing can fork new descendants while the tree is collected.
+/// Each process is frozen (SIGSTOP) as soon as it is found, parents before
+/// children, so nothing keeps forking while the tree is collected.
 pub fn kill_descendants(child: &mut Child) {
     #[cfg(unix)]
     {
-        fn children(pid: u32) -> Vec<u32> {
-            Command::new("pgrep")
-                .args(["-P", &pid.to_string()])
+        /// (pid, parent pid) of every process: one `ps` per pass instead of one
+        /// `pgrep` per process (each of which scans the whole table anyway).
+        fn table() -> Vec<(u32, u32)> {
+            Command::new("ps")
+                .args(["-A", "-o", "pid=,ppid="])
                 .stderr(Stdio::null())
                 .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect())
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .filter_map(|l| {
+                            let mut it = l.split_whitespace();
+                            Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default()
         }
         let mut all: Vec<u32> = vec![];
-        let mut stack = vec![child.id()];
         // SIGSTOP is asynchronous: a process may finish one last fork before it
-        // stops, so frozen parents are re-scanned until the tree is stable.
+        // stops, so the tree is read again until a pass finds nothing new.
         for _ in 0..8 {
-            let before = all.len();
-            while let Some(pid) = stack.pop() {
-                if all.contains(&pid) {
+            let procs = table();
+            let mut found = false;
+            let mut queue = std::collections::VecDeque::from([child.id()]);
+            let mut seen = std::collections::HashSet::new();
+            while let Some(pid) = queue.pop_front() {
+                if !seen.insert(pid) {
                     continue;
                 }
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGSTOP);
+                if !all.contains(&pid) {
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGSTOP);
+                    }
+                    all.push(pid);
+                    found = true;
                 }
-                all.push(pid);
-                stack.extend(children(pid));
+                queue.extend(procs.iter().filter(|&&(_, parent)| parent == pid).map(|&(p, _)| p));
             }
-            std::thread::sleep(Duration::from_millis(15));
-            stack = all.iter().flat_map(|&p| children(p)).filter(|c| !all.contains(c)).collect();
-            if stack.is_empty() && all.len() == before {
+            if !found {
                 break;
             }
+            std::thread::sleep(Duration::from_millis(15));
         }
-        for pid in all {
+        // Children first: a dying parent never leaves a stopped, orphaned group behind.
+        for &pid in all.iter().rev() {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGKILL);
             }
@@ -319,12 +334,29 @@ mod tests {
     #[test]
     fn timeout_kills_a_forking_tree() {
         // A parent that keeps forking workers: none may survive the timeout.
+        // A unique duration, so tests running at the same time do not see each other's workers.
+        let worker = format!("sleep 299.{}", std::process::id());
         let mut cmd = Command::new("sh");
-        cmd.args(["-c", "while true; do sleep 300 & sleep 0.01; done"]);
+        cmd.args(["-c", &format!("while true; do {worker} & sleep 0.01; done")]);
         let out = run(cmd, None, Duration::from_millis(800)).unwrap();
         assert!(out.timed_out);
         std::thread::sleep(Duration::from_millis(300));
-        let left = Command::new("pgrep").args(["-fl", "^sleep 300"]).output().unwrap();
+        let left = Command::new("pgrep").args(["-fl", &format!("^{}$", worker.replace('.', "[.]"))]).output().unwrap();
+        assert!(String::from_utf8_lossy(&left.stdout).trim().is_empty(), "survivors: {}", String::from_utf8_lossy(&left.stdout));
+    }
+
+    #[test]
+    fn timeout_kills_a_wide_tree_quickly() {
+        // 200 workers: one process-table read per pass, not one per process.
+        let worker = format!("sleep 298.{}", std::process::id());
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("i=0; while [ $i -lt 200 ]; do {worker} & i=$((i+1)); done; wait")]);
+        let start = Instant::now();
+        let out = run(cmd, None, Duration::from_millis(1500)).unwrap();
+        assert!(out.timed_out);
+        assert!(start.elapsed() < Duration::from_secs(4), "took {:?}", start.elapsed());
+        std::thread::sleep(Duration::from_millis(300));
+        let left = Command::new("pgrep").args(["-fl", &format!("^{}$", worker.replace('.', "[.]"))]).output().unwrap();
         assert!(String::from_utf8_lossy(&left.stdout).trim().is_empty(), "survivors: {}", String::from_utf8_lossy(&left.stdout));
     }
 

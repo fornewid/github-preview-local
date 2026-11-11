@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 export const DEFAULT_PROFILE = path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile')
-const profile = process.argv[2] || DEFAULT_PROFILE
+const profile = path.resolve(process.argv[2] || DEFAULT_PROFILE)
 // The profile holds a GitHub session: keep it private to this user.
 fs.mkdirSync(profile, { recursive: true, mode: 0o700 })
 fs.chmodSync(profile, 0o700)

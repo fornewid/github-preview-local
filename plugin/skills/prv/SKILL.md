@@ -8,7 +8,8 @@ description: Open a GitHub-style "Files changed" preview of the current branch (
 `prv` shows the current branch compared with its base branch the way GitHub's pull request
 "Files changed" tab does (three-dot diff from the merge base, split/unified view, hide whitespace,
 file tree, viewed files, expandable context). The user reviews it in a native window; nothing is
-served over HTTP and nothing is sent to GitHub unless they press **Confirm**.
+served over HTTP, and prv talks to the repository's `origin` only: it fetches the base branch, looks
+up an open pull request on origin's GitHub host, and pushes only when the user presses **Confirm**.
 
 ## Run it
 

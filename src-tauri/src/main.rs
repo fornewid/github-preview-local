@@ -408,6 +408,17 @@ fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 fn main() {
+    // prv talks to the repository's origin only. The GitHub CLI (used on Confirm and to find an
+    // open pull request) would otherwise send telemetry and check for updates; every child
+    // process (gh, git and its credential helpers, local checks) inherits these.
+    for (key, value) in [
+        ("GH_TELEMETRY", "false"),
+        ("DO_NOT_TRACK", "1"),
+        ("GH_NO_UPDATE_NOTIFIER", "1"),
+        ("GH_NO_EXTENSION_UPDATE_NOTIFIER", "1"),
+    ] {
+        std::env::set_var(key, value);
+    }
     let cli = Cli::parse();
     let cwd = cli.dir.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
     let git = Git::discover(&cwd).unwrap_or_else(|e| fail(e));

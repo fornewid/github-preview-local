@@ -56,3 +56,25 @@ pub fn html(data: &serde_json::Value) -> String {
         None => format!("{UI_HTML}{script}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An exported page restricts itself like the native window: nothing from other hosts.
+    #[test]
+    fn export_carries_the_window_csp() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap();
+        for directive in ["img-src", "font-src", "connect-src", "media-src", "default-src"] {
+            let value = csp.split(';').map(str::trim).find(|d| d.starts_with(directive)).unwrap_or_default();
+            // Tauri's IPC endpoint is the only http(s) source.
+            let remote = value.split_whitespace().skip(1).any(|t| t.contains('*') || (t.starts_with("http") && t != "http://ipc.localhost"));
+            assert!(!remote, "{value}");
+        }
+        let page = html(&json!({}));
+        let head = &page[..page.find("<script").unwrap()];
+        assert!(head.contains(&format!("content=\"{}\"", csp.replace('\'', "&#39;"))), "CSP meta missing before the first script");
+        assert!(head.contains("<meta name=\"referrer\" content=\"no-referrer\">"));
+    }
+}
