@@ -31,15 +31,21 @@ local checks, and when you are happy press **Confirm** to push the branch and op
 - **Made for AI-assisted coding**: `gh-prv-local` blocks until you submit a review and prints it to stdout
   (Markdown or JSON) with file, line, code snippet and comment — Claude Code acts on it directly.
 
-| Split | Unified |
-|---|---|
-| ![split](docs/images/split-light.png) | ![unified](docs/images/unified-light.png) |
+**Review with line comments; the review goes back to Claude Code.**
 
-| Review | Merge status |
-|---|---|
-| ![review](docs/images/review.png) | ![merge status](docs/images/merge-status.png) |
+![Adding a line comment and submitting a review](docs/images/review.gif)
 
-![dark](docs/images/split-dark.png)
+**Local checks and the merge panel, then *Confirm* to push and open the pull request.**
+
+![Running local checks from the merge panel](docs/images/checks.gif)
+
+**Split or unified, every theme, and the file tree.**
+
+![Switching to split view in the dark theme and opening a file from the tree](docs/images/views.gif)
+
+**Any window size, laid out the way github.com does.**
+
+![Narrowing the window: the file tree becomes a dialog and labels shorten](docs/images/widths.gif)
 
 ## Why
 
@@ -183,6 +189,7 @@ scripts/native-selftest.sh --github you/scratch-repo  # real push and pull reque
 
 cd tools/reference && npm install
 node ui-test.mjs path/to/export.html                  # end-to-end checks of the review UI
+node docgifs.mjs path/to/export.html                  # the README animations (needs ffmpeg)
 ```
 
 The page is compared with the signed-in github.com page using the tools in `tools/reference`;
