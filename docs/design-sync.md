@@ -11,7 +11,7 @@ once; what they share, such as starting the signed-in Chrome, is in `common.mjs`
 node tools/reference/login.mjs
 ```
 
-This opens a plain Chrome window with a dedicated profile in `~/.cache/prv-reference/chrome-profile`.
+This opens a plain Chrome window with a dedicated profile in `~/.cache/gh-prv-local-reference/chrome-profile`.
 Sign in to GitHub there (2FA and passkeys work). The window closes by itself. The capture tools
 reuse this profile headlessly. Delete the folder to sign out for good.
 
@@ -45,9 +45,9 @@ update `@primer/primitives`.
 ## 4. Compare with gh-prv-local
 
 ```bash
-gh-prv-local -C <repo of the same PR> --no-fetch export -o ../../.ref/prv.html
-node local-states.mjs ../../.ref/prv.html ../../.ref/prv-states
-python3 compare.py ../../.ref/gh-states ../../.ref/prv-states ../../.ref/out --align-gh 261.5 --align-prv 226
+gh-prv-local -C <repo of the same PR> --no-fetch export -o ../../.ref/export.html
+node local-states.mjs ../../.ref/export.html ../../.ref/local-states
+python3 compare.py ../../.ref/gh-states ../../.ref/local-states ../../.ref/out --align-gh 261.5 --align-local 226
 ```
 
 `breakpoints.mjs` checks the other dimension, window width: it finds every width at which the
@@ -56,8 +56,8 @@ file headers, …) on github.com and on the export, and prints both columns; any
 change in `ui/src/styles/prv.css` (the "Widths and zoom" section) or `ui/src/layout.ts`:
 
 ```bash
-node breakpoints.mjs $PR ../../.ref/prv.html --from 2560 --to 320
-node breakpoints.mjs $PR ../../.ref/prv.html --from 1600 --to 1012 --panel   # side panel open
+node breakpoints.mjs $PR ../../.ref/export.html --from 2560 --to 320
+node breakpoints.mjs $PR ../../.ref/export.html --from 1600 --to 1012 --panel   # side panel open
 ```
 
 `typography.mjs` compares text, tab by tab: it pairs the texts both pages show (labels, commit
@@ -67,8 +67,8 @@ icons whose color differs. Pairs of different elements that happen to share a te
 request title and a commit title, for example) show up too; skip those:
 
 ```bash
-node typography.mjs $PR ../../.ref/prv.html --width 1440
-node typography.mjs $PR ../../.ref/prv.html --width 375
+node typography.mjs $PR ../../.ref/export.html --width 1440
+node typography.mjs $PR ../../.ref/export.html --width 375
 ```
 
 `compare.py` aligns both captures at the pull request toolbar (pass its top in CSS px for each

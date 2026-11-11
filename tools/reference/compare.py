@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Side-by-side and difference images of github.com captures vs prv captures.
+"""Side-by-side and difference images of github.com captures vs gh-prv-local captures.
 
-    python3 compare.py <github dir> <prv dir> <out dir> [--align-gh Y --align-prv Y]
+    python3 compare.py <github dir> <local dir> <out dir> [--align-gh Y --align-local Y]
 
 Both captures are 1440x900 CSS px (2x). The page above the pull request toolbar differs (github.com
 has its global header and repository navigation), so images are aligned at the toolbar: pass the
@@ -15,20 +15,20 @@ from PIL import Image, ImageChops, ImageDraw
 
 p = argparse.ArgumentParser()
 p.add_argument('gh')
-p.add_argument('prv')
+p.add_argument('local')
 p.add_argument('out')
 p.add_argument('--align-gh', type=float, default=0)
-p.add_argument('--align-prv', type=float, default=0)
+p.add_argument('--align-local', type=float, default=0)
 a = p.parse_args()
 os.makedirs(a.out, exist_ok=True)
 
 for name in sorted(os.listdir(a.gh)):
-    if not name.endswith('.png') or not os.path.exists(os.path.join(a.prv, name)):
+    if not name.endswith('.png') or not os.path.exists(os.path.join(a.local, name)):
         continue
     g = Image.open(os.path.join(a.gh, name)).convert('RGB')
-    l = Image.open(os.path.join(a.prv, name)).convert('RGB')
+    l = Image.open(os.path.join(a.local, name)).convert('RGB')
     scale = g.width / 1440
-    dy = round((a.align_gh - a.align_prv) * scale)
+    dy = round((a.align_gh - a.align_local) * scale)
     # Shift github.com up so both toolbars share the same y.
     if dy > 0:
         g = g.crop((0, dy, g.width, g.height))

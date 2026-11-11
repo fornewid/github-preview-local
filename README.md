@@ -9,7 +9,8 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   your last review*, commit ranges), resizable file tree with filters, *Viewed* files, settings
   (*Unified / Split*, *Whitespace changes*, *Minimize comments*, *Compact line height*), expandable
   context, word-level highlights, GitHub's syntax highlighting (`pl-*`), CODEOWNERS, *Overview /
-  Comments / Merge status* panels and every Primer theme (light, dark, dimmed, high contrast).
+  Comments / Merge status* panels, and light or dark following the system (an export also takes
+  `?theme=dark_dimmed`, `light_high_contrast`, …).
 - **Any window size and zoom**: from a phone-sized 320px window to 4K, the page changes layout at
   the same widths github.com does (file tree and side panels become dialogs, labels shorten,
   toolbar controls move into an overflow menu, …). The native window zooms with Cmd/Ctrl + `=` /

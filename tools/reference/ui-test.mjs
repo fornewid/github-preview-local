@@ -4,6 +4,7 @@
 // to 2560px (file tree and side panel dialogs, side panel width, overflow menu, compact headers).
 //
 //   node ui-test.mjs <preview.html>
+import { fileURLToPath } from 'node:url'
 import { exportUrl, openChrome, openExport } from './common.mjs'
 
 const file = process.argv[2]
@@ -411,7 +412,7 @@ await check('under 768px: compact file header, its menu offers the hidden action
 
 await check('native views (fake bridge): checks list beside the log, stacked at 768px and below', async () => {
   const native = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
-  await native.addInitScript({ path: new URL('./fake-native.js', import.meta.url).pathname })
+  await native.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
   const p = await native.newPage()
   p.on('pageerror', (e) => errors.push(e.message))
   await p.goto(exportUrl(file), { waitUntil: 'load' })

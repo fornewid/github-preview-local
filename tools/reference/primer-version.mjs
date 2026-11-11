@@ -24,7 +24,7 @@ const versions = JSON.parse(execFileSync('npm', ['view', '@primer/react', 'versi
   .slice(-Number(countArg))
   .reverse()
 // A per-user cache (not a shared temp dir): npm pack and tar run inside it.
-const cache = path.join(os.homedir(), '.cache', 'prv-reference', 'primer-react')
+const cache = path.join(os.homedir(), '.cache', 'gh-prv-local-reference', 'primer-react')
 fs.mkdirSync(cache, { recursive: true, mode: 0o700 })
 
 const cssOf = (dir) => {

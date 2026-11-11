@@ -4,7 +4,7 @@
 //
 //   node login.mjs [profileDir]
 //
-// The profile defaults to ~/.cache/prv-reference/chrome-profile (outside the repository; it
+// The profile defaults to ~/.cache/gh-prv-local-reference/chrome-profile (outside the repository; it
 // holds your GitHub session). Delete that folder to sign out for good.
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'

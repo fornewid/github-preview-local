@@ -1,5 +1,5 @@
 {
-  "name": "prv-reference-tools",
+  "name": "gh-prv-local-reference-tools",
   "private": true,
   "type": "module",
   "description": "Measure the signed-in github.com pull request page and compare gh-prv-local with it (uses the installed Google Chrome). See docs/design-sync.md.",

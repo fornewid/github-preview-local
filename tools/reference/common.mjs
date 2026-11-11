@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 /** The profile login.mjs signs in with: outside the repository, it holds your GitHub session. */
-export const DEFAULT_PROFILE = path.join(os.homedir(), '.cache', 'prv-reference', 'chrome-profile')
+export const DEFAULT_PROFILE = path.join(os.homedir(), '.cache', 'gh-prv-local-reference', 'chrome-profile')
 
 // Window size, light or dark scheme (default light), device scale (default 1); English UI.
 const contextOptions = ({ width = 1440, height = 900, scheme, scale }) => ({

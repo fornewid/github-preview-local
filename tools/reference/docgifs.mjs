@@ -7,9 +7,10 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { exportUrl } from './common.mjs'
 
-const [, , file, outDir = new URL('../../docs/images', import.meta.url).pathname] = process.argv
+const [, , file, outDir = fileURLToPath(new URL('../../docs/images', import.meta.url))] = process.argv
 const url = exportUrl(file)
 const size = { width: 1280, height: 760 }
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gh-prv-local-gifs-'))
@@ -46,7 +47,7 @@ const GIF_WIDTH = 1024
 async function scene(name, settings, play, { native = false, scheme = 'light', stills = false } = {}) {
   const ctx = await browser.newContext({ viewport: size, colorScheme: scheme, locale: 'en-US' })
   await ctx.addInitScript(cursor)
-  if (native) await ctx.addInitScript({ path: new URL('./fake-native.js', import.meta.url).pathname })
+  if (native) await ctx.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
   await ctx.addInitScript((s) => {
     if (!sessionStorage.getItem('gif')) {
       localStorage.clear()
