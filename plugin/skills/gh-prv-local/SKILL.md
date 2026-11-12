@@ -24,6 +24,7 @@ gh-prv-local                 # compare HEAD with the remote default branch (fetc
 gh-prv-local --base develop  # compare with another base branch
 gh-prv-local --uncommitted   # include uncommitted and untracked changes (great right after editing)
 gh-prv-local --no-fetch      # skip `git fetch` of the base branch
+gh-prv-local --browser       # review in a browser tab instead of the native window (if the user prefers)
 gh-prv-local --format json   # machine-readable result
 ```
 
@@ -64,4 +65,6 @@ Makefile targets and pre-commit are detected. Check commands receive `GH_PRV_LOC
 Checks execute commands defined by the repository. Only run `gh-prv-local checks` when the user asks for it or
 the repository is trusted (e.g. the user's own project), never on an unfamiliar clone.
 
-If the machine has no display (SSH, containers), use `gh-prv-local export` and give the user the file path.
+If the machine has no display (SSH, containers), run `GH_PRV_LOCAL_PORT=19514 gh-prv-local --browser=none` (the
+user forwards that port and opens the printed address), or use `gh-prv-local export` and give the
+user the file path.

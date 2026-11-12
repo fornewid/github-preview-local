@@ -35,8 +35,11 @@ export interface CheckEvent {
 }
 
 export interface Transport {
-  /** Checks, commit ranges and Confirm (push + pull request) exist only in the native window. */
-  kind: 'native' | 'static'
+  /**
+   * Connected to the CLI: the native window (Tauri IPC) or a browser tab (`--browser`, HTTP on
+   * 127.0.0.1). Checks, commit ranges and Confirm (push + pull request) need it; an export is static.
+   */
+  kind: 'native' | 'browser' | 'static'
   getSnapshot(q?: SnapshotQuery): Promise<Snapshot>
   getContents(file: FileDiff, side: ContentSide): Promise<string | null>
   /** An image file's side as a `data:` URL (see isImage), or null. */
@@ -53,12 +56,19 @@ export interface Transport {
   openInEditor(path: string): Promise<void>
   /** Zooms the native window like a browser (no-op in a browser, which zooms by itself). */
   setZoom(scale: number): Promise<void>
+  /** A browser tab: the CLI stopped (Ctrl-C, or it ended) without the review being submitted here. */
+  onGone?(cb: () => void): void
 }
+
+/** Talks to the CLI (the native window or a browser tab), as opposed to a static export. */
+export const connected = (t: Transport | null | undefined) => !!t && t.kind !== 'static'
 
 declare global {
   interface Window {
     __PRV_DATA__?: StaticData
     __TAURI_INTERNALS__?: unknown
+    /** Served by `gh-prv-local --browser`. */
+    __PRV_SERVER__?: boolean
   }
 }
 
@@ -108,6 +118,91 @@ function createNative(): Transport {
   }
 }
 
+/**
+ * A browser tab of `gh-prv-local --browser`: the window's commands over HTTP. Each request carries
+ * this run's token, which came in the address the CLI opened (kept for reloads, dropped from the
+ * address bar).
+ */
+function createHttp(): Transport {
+  const params = new URLSearchParams(location.search)
+  const fromUrl = params.get('token')
+  if (fromUrl) {
+    sessionStorage.setItem('prv:token', fromUrl)
+    params.delete('token')
+    const rest = params.toString()
+    history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`)
+  }
+  const token = fromUrl ?? sessionStorage.getItem('prv:token') ?? ''
+  const call = async <T,>(cmd: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const r = await fetch(`/api/${cmd}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Prv-Token': token },
+      body: JSON.stringify(args),
+    })
+    const body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }))
+    if ('error' in body) throw new Error(body.error)
+    return body.ok as T
+  }
+  // Check progress, one JSON object per line, on a response that stays open while this tab does
+  // (the CLI takes a closed tab as a closed window). Reopened after a hiccup.
+  const listeners = new Set<(e: CheckEvent) => void>()
+  let goneHandler: (() => void) | undefined
+  let done = false
+  void (async () => {
+    let failures = 0
+    while (!done) {
+      try {
+        const r = await fetch('/api/events', { headers: { 'X-Prv-Token': token } })
+        if (!r.ok || !r.body) throw new Error(`${r.status}`)
+        failures = 0
+        const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
+        let buf = ''
+        for (;;) {
+          const { value, done: end } = await reader.read()
+          if (end) break
+          buf += value
+          for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+            const line = buf.slice(0, i)
+            buf = buf.slice(i + 1)
+            if (line) for (const l of listeners) l(JSON.parse(line) as CheckEvent)
+          }
+        }
+      } catch {
+        failures++
+      }
+      if (done) return
+      if (failures >= 3) return goneHandler?.()
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+  })()
+  return {
+    kind: 'browser',
+    getSnapshot: (q) => call<Snapshot>('get_snapshot', { from: q?.from ?? null, to: q?.to ?? null }),
+    getContents: (f, side) => call<string | null>('get_contents', { path: sidePath(f, side), side }),
+    getImage: (f, side) => call<string | null>('get_image', { path: sidePath(f, side), side }),
+    loadState: async () => (await call<PersistedState | null>('load_state')) ?? emptyState(),
+    saveState: (_s, state) => call<void>('save_state', { state }),
+    listChecks: () => call<CheckDef[]>('list_checks'),
+    runCheck: (name) => call<void>('run_check', { name }),
+    cancelCheck: (name) => call<void>('cancel_check', { name }),
+    findPr: async () => (await call<ExistingPr | null>('find_pr')) ?? null,
+    onCheckEvent: (cb) => {
+      listeners.add(cb)
+      return () => listeners.delete(cb)
+    },
+    publish: (req) => call<PublishResult>('publish', { req }),
+    submit: async (result, markdown) => {
+      done = true
+      await call<void>('submit_review', { result, markdown })
+    },
+    openInEditor: (path) => call<void>('open_in_editor', { path }),
+    setZoom: async () => {},
+    onGone: (cb) => {
+      goneHandler = cb
+    },
+  }
+}
+
 function createStatic(data: StaticData): Transport {
   return {
     kind: 'static',
@@ -145,6 +240,7 @@ function createStatic(data: StaticData): Transport {
 
 export async function createTransport(): Promise<Transport> {
   if (window.__TAURI_INTERNALS__) return createNative()
+  if (window.__PRV_SERVER__) return createHttp()
   if (window.__PRV_DATA__) return createStatic(window.__PRV_DATA__)
   // Development: `vite` serves `public/dev-data.json` produced by `gh-prv-local export --data`.
   const url = new URLSearchParams(location.search).get('data') ?? '/dev-data.json'

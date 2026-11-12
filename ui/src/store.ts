@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { GapState } from './diff/model'
 import { highlightFile, type HlLines } from './diff/highlight'
-import type { SnapshotQuery, Transport } from './transport'
+import { connected, type SnapshotQuery, type Transport } from './transport'
 import type {
   CheckState,
   CheckStatus,
@@ -89,9 +89,9 @@ function loadSettings(): Settings {
   return s
 }
 
-/** Confirm (push + pull request) needs the native window and the full branch, not a commit range. */
+/** Confirm (push + pull request) needs the CLI and the full branch, not a commit range. */
 export function canConfirm(s: Pick<Store, 'transport' | 'range'>) {
-  return s.transport?.kind === 'native' && !s.range.from
+  return connected(s.transport) && !s.range.from
 }
 
 /** The pull request already open for this branch: as looked up for Confirm, else from the snapshot. */
@@ -255,7 +255,10 @@ export const useStore = create<Store>((set, get) => ({
       set({ error: String(e), loading: false })
       return
     }
-    if (t.kind !== 'native') return
+    if (!connected(t)) return
+    t.onGone?.(() => {
+      if (!get().submitted) set({ error: 'gh-prv-local is no longer running, so this page cannot do anything. Close it and run gh-prv-local again.' })
+    })
     // A broken .gh-prv-local.toml only affects the Checks tab.
     try {
       const defs = await t.listChecks()
@@ -457,7 +460,7 @@ export const useStore = create<Store>((set, get) => ({
   async findPr() {
     const t = get().transport
     const cur = get().existingPr
-    if (t?.kind !== 'native' || cur?.loading || (cur && !cur.error)) return
+    if (!t || !connected(t) || cur?.loading || (cur && !cur.error)) return
     set({ existingPr: { loading: true, pr: null, error: null } })
     try {
       set({ existingPr: { loading: false, pr: await t.findPr(), error: null } })
@@ -469,7 +472,7 @@ export const useStore = create<Store>((set, get) => ({
   async submit(event, body, publish) {
     const { transport, snapshot, drafts, prTitle, prBody } = get()
     if (!transport || !snapshot) return
-    if (event === 'CONFIRM' && !canConfirm(get())) throw new Error('Confirm needs the native window and all commits selected.')
+    if (event === 'CONFIRM' && !canConfirm(get())) throw new Error('Confirm needs gh-prv-local running and all commits selected.')
     let pub: ReviewResult['publish'] = null
     if (event === 'CONFIRM' && publish) {
       set({ busy: 'Pushing branch and opening pull request…' })
@@ -499,7 +502,7 @@ export const useStore = create<Store>((set, get) => ({
       lastReview: { head: snapshot.head.sha, at: new Date().toISOString() },
       reviewDraft: EMPTY_REVIEW,
     })
-    // Persist the cleared drafts *before* the native window exits (the native side clears them too).
+    // Persist the cleared drafts *before* gh-prv-local exits (it clears them too).
     try {
       await transport.saveState(snapshot, stateOf(get()))
     } catch {

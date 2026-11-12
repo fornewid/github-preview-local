@@ -1034,7 +1034,8 @@ pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side
 pub fn image(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side: &str) -> Option<String> {
     let f = find_side(files, path, side)?;
     let mime = image_mime(path)?;
-    if !f.binary || f.submodule {
+    let size = if side == "old" { f.old_size } else { f.new_size };
+    if !f.binary || f.submodule || size.is_some_and(|n| n as usize > MAX_IMAGE_BYTES) {
         return None;
     }
     let bytes = side_bytes(git, ends, f, path, side)?;

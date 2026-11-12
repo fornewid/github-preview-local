@@ -24,8 +24,10 @@ local checks, and when you are happy press **Confirm** to push the branch and op
 - **Same comparison as a pull request**: three-dot diff from the merge base of `origin/<base>`
   (fetched first), rename detection, `.gitattributes` `linguist-generated`, lock files
   collapsed, binary / submodule / mode changes, CRLF, *No newline at end of file*.
-- **No web server**: a native window (system WebView via Tauri) talks to the CLI over IPC.
-  Nothing listens on a port.
+- **No web server by default**: a native window (system WebView via Tauri) talks to the CLI over
+  IPC; nothing listens on a port. With `--browser` the page opens in a browser tab instead (like
+  plannotator), served on 127.0.0.1 for that run only: every request needs the run's token and
+  must come from that page, and closing the tab ends the run like closing the window.
 - **Talks to `origin` only**: gh-prv-local fetches the base branch from `origin` (skip with `--no-fetch`),
   looks up an open pull request on origin's GitHub host when you choose *Confirm*, and pushes and
   opens the pull request when you press *Confirm*. Nothing else leaves the machine: no other
@@ -97,6 +99,8 @@ gh-prv-local                         # HEAD vs the remote default branch (fetche
 gh-prv-local --base develop          # another base branch (origin/develop if it exists)
 gh-prv-local --uncommitted           # include uncommitted + untracked changes (staging area untouched)
 gh-prv-local --no-fetch              # do not fetch the base branch
+gh-prv-local --browser               # review in a browser tab instead of the window (default browser)
+gh-prv-local --browser=chrome        # in a given browser; --browser=none only prints the address
 gh-prv-local --format json           # JSON review on stdout
 gh-prv-local -C path/to/repo         # run in another repository
 
@@ -177,6 +181,11 @@ gh-prv-local (Rust CLI)                                             native windo
  ├─ publish: git push + gh pr create                                         └─ GitHub's new Files changed layout (prv.css)
  └─ prints the review to stdout on exit
 ```
+
+With `--browser`, the CLI serves the same page and the same calls over HTTP on 127.0.0.1 (port
+19514, or a free one; `GH_PRV_LOCAL_PORT` picks it, e.g. to forward it over SSH with
+`--browser=none`). The address it opens carries a token made for that run; the page sends it with
+every call, and the server also checks the `Host`, `Origin` and `Sec-Fetch-Site` headers.
 
 The UI is a single HTML file (highlighter worker and WASM inlined) embedded in the binary;
 `gh-prv-local export` writes the same file with the data embedded.

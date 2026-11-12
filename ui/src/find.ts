@@ -99,33 +99,46 @@ function rangeIn(root: Node, start: number, end: number): Range {
   return range
 }
 
-type Registry = { set(name: string, h: unknown): void; delete(name: string): void }
+type Highlight = { add(r: Range): void; priority: number }
+type Registry = { set(name: string, h: Highlight): void; delete(name: string): void }
 const registry = (): Registry | undefined => (globalThis.CSS as unknown as { highlights?: Registry } | undefined)?.highlights
-const HighlightCtor = (globalThis as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+const HighlightCtor = (globalThis as unknown as { Highlight?: new () => Highlight }).Highlight
 
-/** Paints every match on screen, and the current one apart. */
+/** At most this many matches are painted at a time (the count covers them all). */
+const MAX_PAINTED = 1000
+
+/** Paints the matches in the files around the window, and the current one apart. */
 export function paintMatches(query: string, current: FindMatch | null) {
   const reg = registry()
   if (!reg || !HighlightCtor) return
   if (!query) return clearMatches()
   const re = pattern(query)
-  const all: Range[] = []
-  let cur: Range | null = null
-  for (const cell of document.querySelectorAll<HTMLElement>('.DiffEntry td[data-find]')) {
-    const inner = cell.querySelector('.diff-text-inner')
-    if (!inner) continue
-    let nth = 0
-    for (const m of (inner.textContent ?? '').matchAll(re)) {
-      const r = rangeIn(inner, m.index, m.index + m[0].length)
-      all.push(r)
-      if (current && current.cell === cell.dataset.find && current.nth === nth && cell.closest<HTMLElement>('.DiffEntry')?.dataset.path === current.path)
-        cur = r
-      nth++
+  const all = new HighlightCtor()
+  const cur = new HighlightCtor()
+  cur.priority = 1
+  let painted = 0
+  const [top, bottom] = [-window.innerHeight, window.innerHeight * 2]
+  for (const entry of document.querySelectorAll<HTMLElement>('.DiffEntry')) {
+    const box = entry.getBoundingClientRect()
+    if (box.bottom < top || box.top > bottom) continue
+    const isFile = current?.path === entry.dataset.path
+    for (const cell of entry.querySelectorAll<HTMLElement>('td[data-find]')) {
+      const inner = cell.querySelector('.diff-text-inner')
+      if (!inner) continue
+      let nth = 0
+      for (const m of (inner.textContent ?? '').matchAll(re)) {
+        const here = isFile && current!.cell === cell.dataset.find && current!.nth === nth
+        if (here) cur.add(rangeIn(inner, m.index, m.index + m[0].length))
+        else if (painted < MAX_PAINTED) {
+          all.add(rangeIn(inner, m.index, m.index + m[0].length))
+          painted++
+        }
+        nth++
+      }
     }
   }
-  reg.set('prv-find', new HighlightCtor(...all))
-  if (cur) reg.set('prv-find-current', new HighlightCtor(cur))
-  else reg.delete('prv-find-current')
+  reg.set('prv-find', all)
+  reg.set('prv-find-current', cur)
 }
 
 export function clearMatches() {

@@ -1,6 +1,6 @@
 ---
 description: Preview this branch as a GitHub pull request, review it, and act on the feedback
-argument-hint: "[--base <branch>] [--uncommitted] [--no-fetch]"
+argument-hint: "[--base <branch>] [--uncommitted] [--no-fetch] [--browser]"
 allowed-tools: Bash(gh-prv-local:*)
 ---
 

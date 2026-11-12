@@ -129,7 +129,8 @@ async function menuCheck() {
 async function findCheck() {
   const word = ($('.DiffEntry td[data-find] .diff-text-inner')?.textContent ?? '').match(/[A-Za-z_]{3,}/)?.[0]
   if (!word) return { ok: false, error: 'no code to search' }
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', metaKey: true, ctrlKey: true, bubbles: true }))
+  const mac = /Mac/.test(navigator.platform)
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', metaKey: mac, ctrlKey: !mac, bubbles: true }))
   await settle('find bar', () => document.activeElement?.getAttribute('aria-label') === 'Find in changes', 3000)
   const input = document.activeElement as HTMLInputElement
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, word)

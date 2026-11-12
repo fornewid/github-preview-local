@@ -26,6 +26,7 @@ import {
 } from '@primer/react'
 import { KeybindingHint } from '@primer/react/experimental'
 import { canConfirm, useOpenPr, useStore } from '../../store'
+import { connected } from '../../transport'
 import type { Commit, ReviewEvent } from '../../types'
 import { commitAuthors, isViewed, plural, shortDate } from '../../diff/util'
 import { MarkdownEditor } from '../MarkdownEditor'
@@ -293,7 +294,7 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
   const s = useStore((st) => st.snapshot)!
   const range = useStore((st) => st.range)
   const lastReview = useStore((st) => st.lastReview)
-  const canRange = useStore((st) => st.transport?.kind === 'native')
+  const canRange = useStore((st) => connected(st.transport))
   const reload = useStore((st) => st.reload)
   const commits = s.commits
   const idx = (sha?: string | null) => (sha ? commits.findIndex((c) => c.sha === sha) : -1)
@@ -387,7 +388,7 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
             </ActionList.Group>
           </ActionList>
           <div className="CommitPicker-rangeHeading">Select a range of commits</div>
-          {!canRange && <div className="CommitPicker-note">Commit ranges are available in the native window (`gh-prv-local`).</div>}
+          {!canRange && <div className="CommitPicker-note">Commit ranges need `gh-prv-local` running (not an export).</div>}
           <ul className="CommitPicker-list">
             {commits.map((c, i) => {
               const checked = mode === 'range' && !!sel && i >= sel[0] && i <= sel[1]
@@ -466,7 +467,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
   const setEvent = (v: ReviewEvent) => setReviewDraft({ event: v })
   const setDraft = (v: boolean) => setReviewDraft({ draft: v })
   const setError = (v: string | null) => setReviewDraft({ error: v })
-  const canPublish = transport.kind === 'native'
+  const canPublish = connected(transport)
   const confirmable = canConfirm({ transport, range })
   const blocked =
     !!busy || (event === 'CONFIRM' && (!confirmable || !!existing?.loading || !!existing?.error))
@@ -519,7 +520,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
             <FormControl.Label>Confirm</FormControl.Label>
             <FormControl.Caption>
               {!canPublish
-                ? 'Available in the native window (`gh-prv-local`).'
+                ? 'Needs `gh-prv-local` running (not an export).'
                 : range.from
                   ? 'Switch back to all commits to confirm.'
                   : pr

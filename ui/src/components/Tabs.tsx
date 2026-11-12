@@ -15,6 +15,7 @@ import {
 } from '@primer/octicons-react'
 import { ActionList, ActionMenu, Button, IconButton } from '@primer/react'
 import { canConfirm, useOpenPr, useStore } from '../store'
+import { connected } from '../transport'
 import { Avatar, CopyButton, copyText } from './common'
 import { ChecksStatusBadge, ConflictsBadge, conflictsText, confirmLabel, useChecksSummary } from './PageHeader'
 import { commitLine } from './changes/Toolbar'
@@ -169,9 +170,9 @@ function CommitAvatars({ c }: { c: Commit }) {
  * only the diff of all commits.
  */
 function useCommitLink(sha: string) {
-  const native = useStore((st) => st.transport?.kind === 'native')
+  const live = useStore((st) => connected(st.transport))
   const openCommit = useStore((st) => st.openCommit)
-  if (!native) return null
+  if (!live) return null
   return {
     href: '#files',
     onClick: (e: React.MouseEvent) => {
@@ -325,7 +326,7 @@ export function CommitsTab() {
 export function ChecksTab() {
   const checks = useStore((st) => st.checks)
   const checksError = useStore((st) => st.checksError)
-  const native = useStore((st) => st.transport?.kind === 'native')
+  const native = useStore((st) => connected(st.transport))
   const s = useStore((st) => st.snapshot)!
   const summary = useChecksSummary()
   const { runCheck, runAllChecks, cancelCheck } = useStore.getState()
@@ -334,7 +335,7 @@ export function ChecksTab() {
   if (!native)
     return (
       <div className="Blankslate-box">
-        <h3>Local checks run in the native window</h3>
+        <h3>Local checks run from gh-prv-local</h3>
         <p>
           Open this preview with <code>gh-prv-local</code> to run checks.
         </p>

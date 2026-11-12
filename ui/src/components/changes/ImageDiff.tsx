@@ -123,10 +123,10 @@ function useStack(before: Loaded, after: Loaded) {
   const [ref, available] = useWidth()
   const width = Math.max(before.width, after.width)
   const height = Math.max(before.height, after.height)
-  // 4px: the frame's and the image's borders.
-  const scale = Math.min(1, Math.min(STACK_MAX, Math.max(available - 4, 1)) / width)
+  // 2px: the frame's borders (an image's own border is inside its size: border-box).
+  const scale = Math.min(1, Math.min(STACK_MAX, Math.max(available - 2, 1)) / width)
   const size = (img: Loaded) => ({ width: Math.round(img.width * scale), height: Math.round(img.height * scale) })
-  return { ref, box: { width: Math.round(width * scale) + 4, height: Math.round(height * scale) + 4 }, size }
+  return { ref, box: { width: Math.round(width * scale) + 2, height: Math.round(height * scale) + 2 }, size }
 }
 
 function Swipe({ before, after, path }: Pair) {
@@ -161,10 +161,9 @@ function Swipe({ before, after, path }: Pair) {
         <span className="ImageDiff-frame ImageDiff-frame--deleted">
           <img src={before.url} alt={`${path} (before)`} style={size(before)} draggable={false} />
         </span>
-        <span className="ImageDiff-swipeShell" style={{ width: `${(1 - at) * 100}%` }}>
-          <span className="ImageDiff-frame ImageDiff-frame--added">
-            <img src={after.url} alt={`${path} (after)`} style={size(after)} draggable={false} />
-          </span>
+        {/* Both from the top left, like Onion Skin; the added one shows right of the handle. */}
+        <span className="ImageDiff-frame ImageDiff-frame--added" style={{ clipPath: `inset(0 0 0 ${Math.round(at * box.width)}px)` }}>
+          <img src={after.url} alt={`${path} (after)`} style={size(after)} draggable={false} />
         </span>
         <span
           className="ImageDiff-swipeBar"

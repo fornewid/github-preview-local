@@ -44,8 +44,12 @@ pub fn data_json(git: &Git, r: &Resolved) -> serde_json::Value {
     let mut images = BTreeMap::new();
     for f in s.files.iter().filter(|f| f.binary && image_mime(&f.path).is_some()) {
         let old = f.old_path.clone().unwrap_or_else(|| f.path.clone());
-        for (side, path) in [("old", old), ("new", f.path.clone())] {
-            if (side == "old" && f.status == "added") || (side == "new" && f.status == "deleted") || total > MAX_TOTAL_CONTENT {
+        for (side, path, size) in [("old", old, f.old_size), ("new", f.path.clone(), f.new_size)] {
+            if (side == "old" && f.status == "added") || (side == "new" && f.status == "deleted") {
+                continue;
+            }
+            // As base64 (4/3 of the bytes); an image that does not fit is left out (the page says so).
+            if total + size.unwrap_or(0) as usize * 4 / 3 > MAX_TOTAL_CONTENT {
                 continue;
             }
             if let Some(url) = image(git, &r.ends, &s.files, &path, side) {
@@ -64,7 +68,11 @@ pub fn html(data: &serde_json::Value) -> String {
         .replace('<', "\\u003c")
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029");
-    let script = format!("<script>window.__PRV_DATA__={payload};</script>");
+    page_with(&format!("<script>window.__PRV_DATA__={payload};</script>"))
+}
+
+/// The UI page with `script` before its own scripts.
+pub fn page_with(script: &str) -> String {
     match UI_HTML.find("<script") {
         Some(i) => format!("{}{}{}", &UI_HTML[..i], script, &UI_HTML[i..]),
         None => format!("{UI_HTML}{script}"),

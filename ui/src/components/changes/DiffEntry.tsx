@@ -18,6 +18,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useMediaQuery } from '../../layout'
 import { MEDIA } from '../../media'
 import { useStore, viewKey, type CommentTarget } from '../../store'
+import { connected } from '../../transport'
 import { parseHunks, splitLines, type DiffLine } from '../../diff/parse'
 import {
   applyExpander,
@@ -184,7 +185,12 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   else if (file.submodule) body = <Placeholder>Submodule {file.path} updated.</Placeholder>
   else if (file.binary && isImage(file))
     // Loaded once the file comes near the viewport, like the diffs.
-    body = visible ? <ImageDiff file={file} fallback={<Placeholder>Binary file not shown.</Placeholder>} /> : <div className="ImageDiff" />
+    body = visible ? (
+      // A new version of the file (another commit range) starts over: no image of the old one stays.
+      <ImageDiff key={`${file.status}:${file.oldSha}:${file.newSha}`} file={file} fallback={<Placeholder>Binary file not shown.</Placeholder>} />
+    ) : (
+      <div className="ImageDiff" />
+    )
   else if (file.binary) body = <Placeholder>Binary file not shown.</Placeholder>
   else if (file.tooLarge) body = <Placeholder>Large diffs are not rendered by default.</Placeholder>
   else if (file.generated && !forceLoad)
@@ -375,7 +381,7 @@ function FileMenu(props: FileMenuProps) {
 /** Mounted only while the menu is open, so files do not each watch the window width. */
 function FileMenuItems({ file, owners, onComment, expand }: FileMenuProps) {
   const transport = useStore((st) => st.transport)
-  const native = transport?.kind === 'native'
+  const native = connected(transport)
   const narrow = useMediaQuery(MEDIA.narrow)
   return (
     <ActionList>

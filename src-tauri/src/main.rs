@@ -11,6 +11,7 @@ mod git;
 mod model;
 mod proc;
 mod publish;
+mod serve;
 #[cfg(test)]
 mod testutil;
 
@@ -52,6 +53,11 @@ struct Cli {
     /// Output format of the review printed on exit
     #[arg(long, value_enum, default_value_t = Format::Markdown, global = true)]
     format: Format,
+    /// Review in a browser tab instead of the native window: the default browser, one by name
+    /// (--browser=chrome), or none (--browser=none: just print the address). Served on 127.0.0.1
+    /// for this run only.
+    #[arg(long, value_name = "BROWSER", num_args = 0..=1, default_missing_value = "", require_equals = true)]
+    browser: Option<String>,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -107,12 +113,204 @@ struct AppState {
     loaded_once: AtomicBool,
     current: Mutex<Option<Arc<Current>>>,
     result: Mutex<Option<(serde_json::Value, String)>>,
-    running: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
+/// What the page asks for, the same in the native window (Tauri IPC) and in a browser tab
+/// (`--browser`, serve.rs). Blocking: callers run them off the UI thread.
 impl AppState {
+    fn new(git: Git, opts: Options, format: Format, selftest: bool) -> AppState {
+        AppState {
+            state_dir: git.git_path(STATE_DIR),
+            git,
+            opts,
+            format,
+            selftest,
+            selftest_reported: AtomicBool::new(false),
+            loaded_once: AtomicBool::new(false),
+            current: Mutex::new(None),
+            result: Mutex::new(None),
+            running: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     fn current(&self) -> Option<Arc<Current>> {
         self.current.lock().ok().and_then(|c| c.clone())
+    }
+
+    fn snapshot(&self, from: Option<String>, to: Option<String>) -> Result<Snapshot, String> {
+        // Ranges come from the commit menu: only full commit ids of this branch are accepted.
+        if let Some(cur) = self.current() {
+            for r in [&from, &to].into_iter().flatten() {
+                if !is_sha(r) || !cur.snapshot.commits.iter().any(|c| &c.sha == r) {
+                    return Err(format!("unknown commit `{r}`"));
+                }
+            }
+        } else if from.is_some() || to.is_some() {
+            return Err("load the full comparison first".into());
+        }
+        let range = RangeInfo { from, to };
+        let mut opts = self.opts.clone();
+        // Fetch only once, on the first load.
+        if self.loaded_once.swap(true, Ordering::SeqCst) {
+            opts.fetch = false;
+        }
+        let r = git::snapshot(&self.git, &opts, &range)?;
+        let snap = r.snapshot.clone();
+        *self.current.lock().map_err(|e| e.to_string())? = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
+        Ok(snap)
+    }
+
+    fn contents(&self, path: &str, side: &str) -> Option<String> {
+        let cur = self.current()?;
+        git::contents(&self.git, &cur.ends, &cur.snapshot.files, path, side)
+    }
+
+    fn image(&self, path: &str, side: &str) -> Option<String> {
+        let cur = self.current()?;
+        git::image(&self.git, &cur.ends, &cur.snapshot.files, path, side)
+    }
+
+    fn load_state(&self) -> Option<serde_json::Value> {
+        read_state(&self.state_dir, &self.current()?.snapshot.head.name)
+    }
+
+    fn save_state(&self, state: &serde_json::Value) -> Result<(), String> {
+        let Some(cur) = self.current() else { return Ok(()) };
+        write_state(&self.state_dir, &cur.snapshot.head.name, state)
+    }
+
+    fn list_checks(&self) -> Result<Vec<CheckDef>, String> {
+        checks::discover(&self.git.root)
+    }
+
+    /// Starts a check; `emit` gets its progress (status changes and output, as the page's `CheckEvent`).
+    fn run_check(&self, name: &str, emit: impl Fn(serde_json::Value) + Send + 'static) -> Result<(), String> {
+        let defs = checks::discover(&self.git.root)?;
+        let def = defs.into_iter().find(|d| d.name == name).ok_or(format!("unknown check `{name}`"))?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut running = self.running.lock().map_err(|e| e.to_string())?;
+            if running.contains_key(name) {
+                return Err(format!("`{name}` is already running"));
+            }
+            running.insert(name.to_string(), cancel.clone());
+        }
+        let env = self.current().map(|c| check_env(&c.snapshot)).unwrap_or_default();
+        let root = self.git.root.clone();
+        let running = self.running.clone();
+        std::thread::spawn(move || {
+            let event = |status: Option<&str>, chunk: Option<&str>, code: Option<i32>| {
+                emit(serde_json::json!({ "name": def.name, "status": status, "chunk": chunk, "exitCode": code }))
+            };
+            event(Some("running"), None, None);
+            // Output arrives batched (at most ~10 events per second).
+            let code = checks::run(&def, &root, &env, &cancel, Some(256 * 1024), |c| event(None, Some(c), None));
+            let status = if cancel.load(Ordering::SeqCst) {
+                "cancelled"
+            } else if code == Some(0) {
+                "success"
+            } else {
+                "failure"
+            };
+            if let Ok(mut running) = running.lock() {
+                running.remove(&def.name);
+            }
+            event(Some(status), None, code);
+        });
+        Ok(())
+    }
+
+    fn cancel_check(&self, name: &str) -> Result<(), String> {
+        if let Some(flag) = self.running.lock().map_err(|e| e.to_string())?.get(name) {
+            flag.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn find_pr(&self) -> Result<Option<ExistingPr>, String> {
+        let Some(cur) = self.current() else { return Ok(None) };
+        publish::find_pr(&self.git, &cur.snapshot)
+    }
+
+    fn publish(&self, req: &PublishRequest) -> Result<PublishResult, String> {
+        let Some(cur) = self.current() else { return Err("nothing loaded".into()) };
+        publish::publish(&self.git, cur.remote.as_deref(), &cur.snapshot, req)
+    }
+
+    /// Keeps the review for stdout; the caller ends the run.
+    fn submit(&self, result: serde_json::Value, markdown: String) {
+        // Submitted comments must not come back as pending drafts next time.
+        if let Some(cur) = self.current() {
+            if let Some(mut st) = read_state(&self.state_dir, &cur.snapshot.head.name) {
+                st["drafts"] = serde_json::json!([]);
+                let _ = write_state(&self.state_dir, &cur.snapshot.head.name, &st);
+            }
+        }
+        if let Ok(mut r) = self.result.lock() {
+            *r = Some((result, markdown));
+        }
+    }
+
+    /// Opens a changed file in a text editor. Never hands the file to an OS
+    /// launcher (which could execute scripts or app bundles from the repository).
+    fn open_in_editor(&self, path: &str) -> Result<(), String> {
+        let cur = self.current().ok_or("nothing loaded")?;
+        if !cur.snapshot.files.iter().any(|f| f.path == path && f.status != "deleted") {
+            return Err("not a changed file".into());
+        }
+        // Canonical paths are only used for the containment check (Windows returns \\?\ paths).
+        let root = self.git.root.canonicalize().map_err(|e| e.to_string())?;
+        let canonical = self.git.root.join(path).canonicalize().map_err(|e| e.to_string())?;
+        if !canonical.starts_with(&root) || !canonical.is_file() {
+            return Err("the file is outside the repository".into());
+        }
+        let f = self.git.root.join(path).to_string_lossy().into_owned();
+        let target = format!("{f}:1");
+        let spawn = |prog: &str, args: &[&str]| std::process::Command::new(prog).args(args).spawn().is_ok();
+        if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
+            if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {
+                return Ok(());
+            }
+        }
+        let code = if cfg!(windows) { "code.cmd" } else { "code" };
+        if spawn(code, &["-g", &target]) {
+            return Ok(());
+        }
+        let ok = if cfg!(target_os = "macos") {
+            spawn("open", &["-t", &f]) // -t: always the default *text editor*
+        } else if cfg!(windows) {
+            spawn("notepad.exe", &[&f])
+        } else {
+            false
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err("no editor found: install the VS Code `code` command or set GH_PRV_LOCAL_EDITOR (e.g. GH_PRV_LOCAL_EDITOR=gedit)".into())
+        }
+    }
+
+    /// The end of a run: stops running checks, then prints the review (or that none was given).
+    fn finish(&self) {
+        let any = self.running.lock().map(|running| {
+            for flag in running.values() {
+                flag.store(true, Ordering::SeqCst);
+            }
+            !running.is_empty()
+        });
+        if any.unwrap_or(false) {
+            // Give the runner threads a moment (at most 400ms) to kill their process trees;
+            // each leaves `running` once its tree is gone.
+            let deadline = Instant::now() + Duration::from_millis(400);
+            while Instant::now() < deadline && self.running.lock().is_ok_and(|r| !r.is_empty()) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if !self.selftest_reported.load(Ordering::SeqCst) {
+            let result = self.result.lock().ok().and_then(|r| r.clone());
+            print_result(self.format, &result);
+        }
     }
 }
 
@@ -155,68 +353,6 @@ fn is_sha(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-#[tauri::command]
-async fn get_snapshot(app: State<'_, AppState>, from: Option<String>, to: Option<String>) -> Result<Snapshot, String> {
-    // Ranges come from the commit menu: only full commit ids of this branch are accepted.
-    if let Some(cur) = app.current() {
-        for r in [&from, &to].into_iter().flatten() {
-            if !is_sha(r) || !cur.snapshot.commits.iter().any(|c| &c.sha == r) {
-                return Err(format!("unknown commit `{r}`"));
-            }
-        }
-    } else if from.is_some() || to.is_some() {
-        return Err("load the full comparison first".into());
-    }
-    let range = RangeInfo { from, to };
-    let git = app.git.clone();
-    let mut opts = app.opts.clone();
-    // Fetch only once, on the first load.
-    if app.loaded_once.swap(true, Ordering::SeqCst) {
-        opts.fetch = false;
-    }
-    let r = tauri::async_runtime::spawn_blocking(move || git::snapshot(&git, &opts, &range))
-        .await
-        .map_err(|e| e.to_string())??;
-    let snap = r.snapshot.clone();
-    *app.current.lock().map_err(|e| e.to_string())? = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
-    Ok(snap)
-}
-
-#[tauri::command]
-async fn get_contents(app: State<'_, AppState>, path: String, side: String) -> Result<Option<String>, String> {
-    let Some(cur) = app.current() else { return Ok(None) };
-    let git = app.git.clone();
-    tauri::async_runtime::spawn_blocking(move || git::contents(&git, &cur.ends, &cur.snapshot.files, &path, &side))
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_image(app: State<'_, AppState>, path: String, side: String) -> Result<Option<String>, String> {
-    let Some(cur) = app.current() else { return Ok(None) };
-    let git = app.git.clone();
-    tauri::async_runtime::spawn_blocking(move || git::image(&git, &cur.ends, &cur.snapshot.files, &path, &side))
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn load_state(app: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
-    let Some(cur) = app.current() else { return Ok(None) };
-    Ok(read_state(&app.state_dir, &cur.snapshot.head.name))
-}
-
-#[tauri::command]
-fn save_state(app: State<'_, AppState>, state: serde_json::Value) -> Result<(), String> {
-    let Some(cur) = app.current() else { return Ok(()) };
-    write_state(&app.state_dir, &cur.snapshot.head.name, &state)
-}
-
-#[tauri::command]
-fn list_checks(app: State<'_, AppState>) -> Result<Vec<CheckDef>, String> {
-    checks::discover(&app.git.root)
-}
-
 fn check_env(snap: &Snapshot) -> Vec<(String, String)> {
     vec![
         ("GH_PRV_LOCAL_BASE".into(), snap.base.reference.clone()),
@@ -227,90 +363,78 @@ fn check_env(snap: &Snapshot) -> Vec<(String, String)> {
     ]
 }
 
-#[tauri::command]
-fn run_check(handle: tauri::AppHandle, app: State<'_, AppState>, name: String) -> Result<(), String> {
-    let defs = checks::discover(&app.git.root)?;
-    let def = defs.into_iter().find(|d| d.name == name).ok_or(format!("unknown check `{name}`"))?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut running = app.running.lock().map_err(|e| e.to_string())?;
-        if running.contains_key(&name) {
-            return Err(format!("`{name}` is already running"));
-        }
-        running.insert(name.clone(), cancel.clone());
-    }
-    let env = app.current().map(|c| check_env(&c.snapshot)).unwrap_or_default();
-    let root = app.git.root.clone();
-    std::thread::spawn(move || {
-        let emit = |status: Option<&str>, chunk: Option<&str>, code: Option<i32>| {
-            let _ = handle.emit(
-                "check-event",
-                serde_json::json!({ "name": def.name, "status": status, "chunk": chunk, "exitCode": code }),
-            );
-        };
-        emit(Some("running"), None, None);
-        // Output arrives batched (at most ~10 events per second).
-        let code = checks::run(&def, &root, &env, &cancel, Some(256 * 1024), |c| emit(None, Some(c), None));
-        let status = if cancel.load(Ordering::SeqCst) {
-            "cancelled"
-        } else if code == Some(0) {
-            "success"
-        } else {
-            "failure"
-        };
-        if let Ok(mut running) = handle.state::<AppState>().running.lock() {
-            running.remove(&def.name);
-        }
-        emit(Some(status), None, code);
-    });
-    Ok(())
+/* ---------------- The native window's commands (Tauri IPC) ---------------- */
+
+type App<'a> = State<'a, Arc<AppState>>;
+
+/// Runs a blocking call of the state on a worker thread.
+async fn blocking<T: Send + 'static>(app: &App<'_>, f: impl FnOnce(&AppState) -> T + Send + 'static) -> Result<T, String> {
+    let st = Arc::clone(app.inner());
+    tauri::async_runtime::spawn_blocking(move || f(&st)).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn cancel_check(app: State<'_, AppState>, name: String) -> Result<(), String> {
-    if let Some(flag) = app.running.lock().map_err(|e| e.to_string())?.get(&name) {
-        flag.store(true, Ordering::SeqCst);
-    }
-    Ok(())
+async fn get_snapshot(app: App<'_>, from: Option<String>, to: Option<String>) -> Result<Snapshot, String> {
+    blocking(&app, move |st| st.snapshot(from, to)).await?
 }
 
 #[tauri::command]
-async fn find_pr(app: State<'_, AppState>) -> Result<Option<ExistingPr>, String> {
-    let Some(cur) = app.current() else { return Ok(None) };
-    let git = app.git.clone();
-    tauri::async_runtime::spawn_blocking(move || publish::find_pr(&git, &cur.snapshot))
-        .await
-        .map_err(|e| e.to_string())?
+async fn get_contents(app: App<'_>, path: String, side: String) -> Result<Option<String>, String> {
+    blocking(&app, move |st| st.contents(&path, &side)).await
 }
 
 #[tauri::command]
-async fn publish(app: State<'_, AppState>, req: PublishRequest) -> Result<PublishResult, String> {
-    let Some(cur) = app.current() else { return Err("nothing loaded".into()) };
-    let git = app.git.clone();
-    tauri::async_runtime::spawn_blocking(move || publish::publish(&git, cur.remote.as_deref(), &cur.snapshot, &req))
-        .await
-        .map_err(|e| e.to_string())?
+async fn get_image(app: App<'_>, path: String, side: String) -> Result<Option<String>, String> {
+    blocking(&app, move |st| st.image(&path, &side)).await
 }
 
 #[tauri::command]
-fn submit_review(handle: tauri::AppHandle, app: State<'_, AppState>, result: serde_json::Value, markdown: String) {
-    // Submitted comments must not come back as pending drafts next time.
-    if let Some(cur) = app.current() {
-        if let Some(mut st) = read_state(&app.state_dir, &cur.snapshot.head.name) {
-            st["drafts"] = serde_json::json!([]);
-            let _ = write_state(&app.state_dir, &cur.snapshot.head.name, &st);
-        }
-    }
-    if let Ok(mut r) = app.result.lock() {
-        *r = Some((result, markdown));
-    }
+fn load_state(app: App<'_>) -> Option<serde_json::Value> {
+    app.load_state()
+}
+
+#[tauri::command]
+fn save_state(app: App<'_>, state: serde_json::Value) -> Result<(), String> {
+    app.save_state(&state)
+}
+
+#[tauri::command]
+fn list_checks(app: App<'_>) -> Result<Vec<CheckDef>, String> {
+    app.list_checks()
+}
+
+#[tauri::command]
+fn run_check(handle: tauri::AppHandle, app: App<'_>, name: String) -> Result<(), String> {
+    app.run_check(&name, move |e| {
+        let _ = handle.emit("check-event", e);
+    })
+}
+
+#[tauri::command]
+fn cancel_check(app: App<'_>, name: String) -> Result<(), String> {
+    app.cancel_check(&name)
+}
+
+#[tauri::command]
+async fn find_pr(app: App<'_>) -> Result<Option<ExistingPr>, String> {
+    blocking(&app, |st| st.find_pr()).await?
+}
+
+#[tauri::command]
+async fn publish(app: App<'_>, req: PublishRequest) -> Result<PublishResult, String> {
+    blocking(&app, move |st| st.publish(&req)).await?
+}
+
+#[tauri::command]
+fn submit_review(handle: tauri::AppHandle, app: App<'_>, result: serde_json::Value, markdown: String) {
+    app.submit(result, markdown);
     handle.exit(0);
 }
 
 /// `GH_PRV_LOCAL_SELFTEST=flows`: a progress report from the UI that does not end the run (the run ends
 /// the normal way, through Confirm). Ignored outside self-tests.
 #[tauri::command]
-fn selftest_log(app: State<'_, AppState>, report: serde_json::Value) {
+fn selftest_log(app: App<'_>, report: serde_json::Value) {
     if app.selftest {
         print_report(&report);
     }
@@ -324,7 +448,7 @@ fn print_report(report: &serde_json::Value) {
 /// End-to-end check used by `GH_PRV_LOCAL_SELFTEST=1 gh-prv-local`: the UI reports what it rendered. Leaves through
 /// the normal exit, which also stops checks still running (exit code 0 when ok, else 3).
 #[tauri::command]
-fn selftest_done(handle: tauri::AppHandle, app: State<'_, AppState>, report: serde_json::Value) {
+fn selftest_done(handle: tauri::AppHandle, app: App<'_>, report: serde_json::Value) {
     if !app.selftest {
         return;
     }
@@ -342,44 +466,9 @@ fn set_zoom(window: tauri::WebviewWindow, scale: f64) -> Result<(), String> {
     window.set_zoom(scale.clamp(0.25, 5.0)).map_err(|e| e.to_string())
 }
 
-/// Opens a changed file in a text editor. Never hands the file to an OS
-/// launcher (which could execute scripts or app bundles from the repository).
 #[tauri::command]
-fn open_in_editor(app: State<'_, AppState>, path: String) -> Result<(), String> {
-    let cur = app.current().ok_or("nothing loaded")?;
-    if !cur.snapshot.files.iter().any(|f| f.path == path && f.status != "deleted") {
-        return Err("not a changed file".into());
-    }
-    // Canonical paths are only used for the containment check (Windows returns \\?\ paths).
-    let root = app.git.root.canonicalize().map_err(|e| e.to_string())?;
-    let canonical = app.git.root.join(&path).canonicalize().map_err(|e| e.to_string())?;
-    if !canonical.starts_with(&root) || !canonical.is_file() {
-        return Err("the file is outside the repository".into());
-    }
-    let f = app.git.root.join(&path).to_string_lossy().into_owned();
-    let target = format!("{f}:1");
-    let spawn = |prog: &str, args: &[&str]| std::process::Command::new(prog).args(args).spawn().is_ok();
-    if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
-        if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {
-            return Ok(());
-        }
-    }
-    let code = if cfg!(windows) { "code.cmd" } else { "code" };
-    if spawn(code, &["-g", &target]) {
-        return Ok(());
-    }
-    let ok = if cfg!(target_os = "macos") {
-        spawn("open", &["-t", &f]) // -t: always the default *text editor*
-    } else if cfg!(windows) {
-        spawn("notepad.exe", &[&f])
-    } else {
-        false
-    };
-    if ok {
-        Ok(())
-    } else {
-        Err("no editor found: install the VS Code `code` command or set GH_PRV_LOCAL_EDITOR (e.g. GH_PRV_LOCAL_EDITOR=gedit)".into())
-    }
+fn open_in_editor(app: App<'_>, path: String) -> Result<(), String> {
+    app.open_in_editor(&path)
 }
 
 /// Opens an http(s) URL or a local HTML file in the default browser.
@@ -541,7 +630,10 @@ fn main() {
             }
             std::process::exit(if failed > 0 { 1 } else { 0 });
         }
-        None => run_window(git, opts, cli.format),
+        None => match cli.browser {
+            Some(browser) => serve::run(Arc::new(AppState::new(git, opts, cli.format, false)), &browser),
+            None => run_window(git, opts, cli.format),
+        },
     }
 }
 
@@ -571,18 +663,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
             fail("GH_PRV_LOCAL_SELFTEST=flows pushes and opens a pull request, so it only runs in a scratch repository prepared by scripts/native-selftest.sh");
         }
     }
-    let state = AppState {
-        state_dir: git.git_path(STATE_DIR),
-        git,
-        opts,
-        format,
-        selftest,
-        selftest_reported: AtomicBool::new(false),
-        loaded_once: AtomicBool::new(false),
-        current: Mutex::new(None),
-        result: Mutex::new(None),
-        running: Mutex::new(HashMap::new()),
-    };
+    let state = Arc::new(AppState::new(git, opts, format, selftest));
     let app = tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
@@ -652,26 +733,8 @@ fn run_window(git: Git, opts: Options, format: Format) {
         .unwrap_or_else(|e| fail(e));
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
-            let st = handle.state::<AppState>();
-            // Stop running checks with the window.
-            let any = st.running.lock().map(|running| {
-                for flag in running.values() {
-                    flag.store(true, Ordering::SeqCst);
-                }
-                !running.is_empty()
-            });
-            if any.unwrap_or(false) {
-                // Give the runner threads a moment (at most 400ms) to kill their process trees;
-                // each leaves `running` once its tree is gone.
-                let deadline = Instant::now() + Duration::from_millis(400);
-                while Instant::now() < deadline && st.running.lock().is_ok_and(|r| !r.is_empty()) {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
-            if !st.selftest_reported.load(Ordering::SeqCst) {
-                let result = st.result.lock().ok().and_then(|r| r.clone());
-                print_result(st.format, &result);
-            }
+            // Stops running checks with the window and prints the review.
+            handle.state::<Arc<AppState>>().finish();
         }
     });
 }

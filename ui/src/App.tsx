@@ -210,6 +210,18 @@ function SubmittedDialog() {
   const submitted = useStore((st) => st.submitted)
   const kind = useStore((st) => st.transport?.kind)
   if (!submitted || kind === 'native') return null
+  // A browser tab: the review went to gh-prv-local, which printed it and ended (like the window closing).
+  if (kind === 'browser')
+    return (
+      <div className="SubmittedDialog-backdrop">
+        <div className="SubmittedDialog" role="dialog" aria-modal aria-labelledby="submitted-title">
+          <header id="submitted-title">Review submitted</header>
+          <div className="SubmittedDialog-body SubmittedDialog-note">
+            gh-prv-local printed it to the terminal{submitted.result.publish ? ' and pushed the branch' : ''}. You can close this tab.
+          </div>
+        </div>
+      </div>
+    )
   return (
     <div className="SubmittedDialog-backdrop">
       <div className="SubmittedDialog" role="dialog" aria-modal aria-labelledby="submitted-title">

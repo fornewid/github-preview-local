@@ -753,7 +753,7 @@ h3 {
   top: 0;
   left: 0;
 }
-/* Sized by the script (one scale for both), so the swipe's narrowing shell does not squeeze them. */
+/* Sized by the script (one scale for both), not by the stack's width. */
 .ImageDiff-stack img {
   max-width: none;
 }
@@ -761,17 +761,6 @@ h3 {
   cursor: ew-resize;
   touch-action: none;
   user-select: none;
-}
-.ImageDiff-swipeShell {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  overflow: hidden;
-}
-.ImageDiff-swipeShell .ImageDiff-frame {
-  right: 0;
-  left: auto;
 }
 .ImageDiff-swipeBar {
   position: absolute;
