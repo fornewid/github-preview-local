@@ -154,9 +154,13 @@ export interface Store {
   busy: string | null
 
   init(t: Transport): Promise<void>
-  reload(q?: SnapshotQuery): Promise<void>
+  /** Loads another commit range; true once its snapshot is the one shown (not stale, no error). */
+  reload(q?: SnapshotQuery): Promise<boolean>
   setTab(t: Tab): void
-  /** Files changed for just this commit (github.com's /pull/N/changes/<sha>). */
+  /**
+   * Files changed for just this commit (github.com's /pull/N/changes/<sha>). Like github.com, the
+   * current tab stays (with the top progress bar) until the commit's changes are loaded.
+   */
   openCommit(sha: string): void
   applySettings(s: Partial<Settings>): void
   setPanel(p: Panel | null): void
@@ -195,11 +199,11 @@ function stateOf(s: Store): PersistedState {
   return { viewed: s.viewed, drafts: s.drafts, prTitle: s.prTitle, prBody: s.prBody, lastReview: s.lastReview }
 }
 
-/** Saves immediately (comments, viewed) or debounced (typing in title/description). */
 /** Loads asked for (commit ranges): only the newest one's answer is used. */
 let reloads = 0
 /** Saves go one after another, so an older one never lands after a newer one. */
 let saving: Promise<unknown> = Promise.resolve()
+/** Saves immediately (comments, viewed) or debounced (typing in title/description). */
 function persist(get: () => Store, delay = 0) {
   clearTimeout(saveTimer)
   const save = () => {
@@ -309,19 +313,20 @@ export const useStore = create<Store>((set, get) => ({
 
   async reload(q) {
     const t = get().transport
-    if (!t) return
+    if (!t) return false
     const range = q ?? get().range
     const id = ++reloads
     set({ loading: true, composing: null, selection: null })
     try {
       const snapshot = await t.getSnapshot(range)
       // A newer load was asked for meanwhile: this one is stale.
-      if (id !== reloads) return
+      if (id !== reloads) return false
       // Invalidate contents only once the new snapshot is current on both sides.
       set((s) => ({ snapshot, range, loading: false, generation: s.generation + 1, contents: {}, hl: {}, fileUI: {} }))
+      return true
     } catch (e) {
-      if (id !== reloads) return
-      set({ error: String(e), loading: false })
+      if (id === reloads) set({ error: String(e), loading: false })
+      return false
     }
   },
 
@@ -331,8 +336,11 @@ export const useStore = create<Store>((set, get) => ({
     window.scrollTo({ top: 0 })
   },
   openCommit: (sha) => {
-    get().setTab('files')
-    void get().reload({ from: sha, to: sha })
+    const from = get().tab
+    void get()
+      .reload({ from: sha, to: sha })
+      // Going to another tab meanwhile cancels the move (the range still changes).
+      .then((shown) => shown && get().tab === from && get().setTab('files'))
   },
 
   applySettings(s) {

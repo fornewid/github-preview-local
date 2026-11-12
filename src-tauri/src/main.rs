@@ -14,6 +14,7 @@ mod publish;
 mod serve;
 #[cfg(test)]
 mod testutil;
+mod update;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use git::{DiffEnds, Git, Options};
@@ -89,6 +90,12 @@ enum Cmd {
     },
     /// List the checks that would run
     ListChecks,
+    /// Replace this binary with the latest release (or VERSION), checked against its SHA-256, and
+    /// update the Claude Code plugin if it is installed. Nothing checks for updates otherwise.
+    Update {
+        /// A release to install instead of the latest, such as 0.2.1
+        version: Option<String>,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq)]
@@ -647,6 +654,11 @@ fn main() {
         std::env::set_var(key, value);
     }
     let cli = Cli::parse();
+    // Needs no repository.
+    if let Some(Cmd::Update { version }) = &cli.command {
+        update::run(version.as_deref()).unwrap_or_else(|e| fail(e));
+        return;
+    }
     let cwd = cli.dir.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
     let git = Git::discover(&cwd).unwrap_or_else(|e| fail(e));
     let opts = Options { base: cli.base.clone(), head: cli.head.clone(), fetch: !cli.no_fetch, uncommitted: cli.uncommitted };
@@ -742,6 +754,7 @@ fn main() {
             }
             std::process::exit(if failed > 0 { 1 } else { 0 });
         }
+        Some(Cmd::Update { .. }) => unreachable!("handled before the repository is opened"),
         // The self-tests exercise the native window.
         None if cli.window || selftest_mode().is_some() => run_window(git, opts, cli.format),
         None => {

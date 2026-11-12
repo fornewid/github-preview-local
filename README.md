@@ -35,7 +35,8 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   remote, no submodule hosts, no GitHub CLI telemetry or update checks, and images in pull request
   descriptions or commit messages are not loaded (they show as links, unlike github.com, which
   serves them through its image proxy). Local checks run your own commands, which may use the
-  network like they would in a terminal.
+  network like they would in a terminal. `gh-prv-local update`, only when you run it, downloads a
+  release from this repository on github.com.
 - **Made for AI-assisted coding**: `gh-prv-local` blocks until you submit a review and prints it to stdout
   (Markdown or JSON) with file, line, code snippet and comment — Claude Code acts on it directly.
 
@@ -67,15 +68,18 @@ macOS and Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fornewid/github-preview-local/main/scripts/install.sh | bash
-# or with the GitHub CLI signed in (also while the repository is private):
-gh api repos/fornewid/github-preview-local/contents/scripts/install.sh -H 'Accept: application/vnd.github.raw' | bash
 ```
 
 This installs the latest [release](https://github.com/fornewid/github-preview-local/releases)'s
-binary to `~/.local/bin/gh-prv-local` after checking its SHA-256. Run it again to update, or pin a
-version with `| bash -s -- v0.1.0`; gh-prv-local itself never checks for updates. On Windows,
-download `gh-prv-local-windows-x64.exe` from the release and save it as `gh-prv-local.exe` in a
-folder on your `PATH`.
+binary to `~/.local/bin/gh-prv-local` after checking its SHA-256 (`| bash -s -- v0.1.0` installs
+that release). On Windows, download `gh-prv-local-windows-x64.exe` from the release and save it as
+`gh-prv-local.exe` in a folder on your `PATH`.
+
+To update, run `gh-prv-local update` (or `gh-prv-local update 0.2.0` for that release). It
+replaces the binary where it is, once the download matches the release's SHA-256 and starts, and
+updates the Claude Code plugin too when it is installed (restart Claude Code to use it). It uses
+the GitHub CLI when it is signed in to github.com, else `curl`. gh-prv-local never checks for
+updates by itself.
 
 Requirements: `git`. To open pull requests: the [GitHub CLI](https://cli.github.com)
 (`gh auth login`, works with GitHub Enterprise Server hosts too). Linux needs the WebKitGTK runtime
@@ -108,6 +112,7 @@ gh-prv-local -C path/to/repo         # run in another repository
 gh-prv-local export [--open] [-o f]  # self-contained HTML (UI + data), opens from disk — for SSH/remote
 gh-prv-local checks [--json] [name]  # run local checks headless (exit 1 on failure)
 gh-prv-local list-checks             # show configured / auto-detected checks
+gh-prv-local update [version]        # install the latest release (or that one) and update the plugin
 ```
 
 Settings from the gear menu (*Unified / Split*, *Whitespace changes*, *Minimize comments* — `i`,

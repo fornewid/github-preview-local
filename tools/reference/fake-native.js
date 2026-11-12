@@ -17,6 +17,9 @@
       const data = window.__PRV_DATA__
       switch (cmd) {
         case 'get_snapshot':
+          // A commit range loads like a slow repository would (`__prvSlowRange` ms), so a test can
+          // look at the page while it does.
+          if (args?.from && window.__prvSlowRange) await new Promise((r) => setTimeout(r, window.__prvSlowRange))
           return data.snapshot
         case 'get_contents':
           return data.contents[`${args.side}:${args.path}`] ?? null

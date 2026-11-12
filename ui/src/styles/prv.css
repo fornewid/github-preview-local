@@ -132,6 +132,30 @@ h3 {
   color: var(--fgColor-muted);
 }
 
+/* Menus are at least 256px (Primer's small overlay), roomier than github.com's 192px minimum. */
+div[data-component='ActionMenu.Overlay'] {
+  min-width: min(256px, calc(100vw - 2rem));
+}
+
+/* github.com's page-load bar (Turbo's, as github.com shows it while a commit's changes load). */
+.ProgressBar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2147483647;
+  width: 100%;
+  height: 3px;
+  background-color: #0076ff;
+  pointer-events: none;
+  transform-origin: 0 0;
+  transition:
+    transform 0.3s cubic-bezier(0.3, 0.8, 0.6, 1),
+    opacity 0.15s cubic-bezier(0.7, 0.1, 0.75, 0.9) 0.15s;
+}
+.ProgressBar.is-done {
+  opacity: 0;
+}
+
 /* ---------- App header ---------- */
 .AppHeader {
   background-color: var(--bgColor-inset);
@@ -1287,6 +1311,13 @@ h3 {
 }
 
 /* ---------- Commit picker ---------- */
+/* Wider than github.com's 480px when the window has room: as wide as its longest commit title,
+   up to 960px (Primer's xxlarge), so titles do not wrap. */
+div.CommitPicker[data-width] {
+  width: fit-content;
+  min-width: min(480px, calc(100dvw - 64px));
+  max-width: min(960px, calc(100dvw - 64px));
+}
 .CommitPicker-modes {
   margin: -8px -16px 0;
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs gh-prv-local to ~/.local/bin (or $PREFIX/bin). Run it again to update.
+# Installs gh-prv-local to ~/.local/bin (or $PREFIX/bin). Once installed, `gh-prv-local update` updates it.
 #
 #   install.sh            the latest release's binary for this machine, checked against its SHA-256
 #   install.sh v0.2.0     that release

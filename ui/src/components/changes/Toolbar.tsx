@@ -367,25 +367,24 @@ function CommitPicker({ open, setOpen }: { open: boolean; setOpen: (v: boolean) 
             { buttonType: 'primary', content: 'Save', onClick: save },
           ]}
         >
-          <ActionList className="CommitPicker-modes">
-            <ActionList.Group selectionVariant="single">
-              <ActionList.Item selected={mode === 'all'} onSelect={() => setMode('all')}>
-                All commits
-                <ActionList.Description variant="block">{plural(commits.length, 'commit')}</ActionList.Description>
-              </ActionList.Item>
-              <ActionList.Item
-                selected={mode === 'since'}
-                disabled={!sinceAvailable || !canRange}
-                onSelect={() => setMode('since')}
-              >
-                Changes since your last review
-                <ActionList.Description variant="block">
-                  {sinceAvailable
-                    ? `${plural(commits.length - 1 - sinceIndex, 'commit')} since ${shortDate(lastReview!.at)}`
-                    : 'No previous review found'}
-                </ActionList.Description>
-              </ActionList.Item>
-            </ActionList.Group>
+          {/* A listbox, as on github.com: the selected mode shows its check mark. */}
+          <ActionList className="CommitPicker-modes" role="listbox" aria-label="Selection" selectionVariant="single">
+            <ActionList.Item selected={mode === 'all'} onSelect={() => setMode('all')}>
+              All commits
+              <ActionList.Description variant="block">{plural(commits.length, 'commit')}</ActionList.Description>
+            </ActionList.Item>
+            <ActionList.Item
+              selected={mode === 'since'}
+              disabled={!sinceAvailable || !canRange}
+              onSelect={() => setMode('since')}
+            >
+              Changes since your last review
+              <ActionList.Description variant="block">
+                {sinceAvailable
+                  ? `${plural(commits.length - 1 - sinceIndex, 'commit')} since ${shortDate(lastReview!.at)}`
+                  : 'No previous review found'}
+              </ActionList.Description>
+            </ActionList.Item>
           </ActionList>
           <div className="CommitPicker-rangeHeading">Select a range of commits</div>
           {!canRange && <div className="CommitPicker-note">Commit ranges need `gh-prv-local` running (not an export).</div>}

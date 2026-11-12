@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, type ReactNode } from 'react'
+import { Component, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Button, Flash, PageLayout, ThemeProvider } from '@primer/react'
 import { useShallow } from 'zustand/react/shallow'
 import { panelLayout, useStore } from './store'
@@ -59,6 +59,7 @@ export function App() {
         ) : (
           <Page />
         )}
+        <ProgressBar />
         <SubmittedDialog />
       </div>
     </ThemeProvider>
@@ -68,7 +69,6 @@ export function App() {
 function Page() {
   const tab = useStore((st) => st.tab)
   const panel = useStore((st) => st.panel)
-  const loading = useStore((st) => st.loading)
   const warnings = useStore((st) => st.snapshot!.warnings)
   const panelDialog = useStore((st) => st.panelDialog)
   const wide = useMediaQuery(MEDIA.dockedPanel)
@@ -93,7 +93,7 @@ function Page() {
               <PullHeader />
             </PageLayout.Header>
             {tab === 'files' ? (
-              <FilesTab loading={loading} warnings={warnings} />
+              <FilesTab warnings={warnings} />
             ) : (
               <PageLayout.Content
                 as="div"
@@ -116,7 +116,7 @@ function Page() {
   )
 }
 
-function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] }) {
+function FilesTab({ warnings }: { warnings: string[] }) {
   const files = useStore((st) => st.snapshot!.files)
   // Not the filter text: only the file tree reads it, so typing re-renders just the tree.
   const { exts, showViewed } = useStore(useShallow((st) => ({ exts: st.filter.exts, showViewed: st.filter.showViewed })))
@@ -161,7 +161,6 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
         </PageLayout.Pane>
       )}
       <PageLayout.Content as="div" padding="none" className="ChangesContent">
-        {loading && <Flash className="ChangesContent-flash">Loading changes…</Flash>}
         {warnings.length > 0 && (
           <Flash variant="warning" className="ChangesContent-flash">
             {warnings.join(' ')}
@@ -173,6 +172,34 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
       </PageLayout.Content>
     </>
   )
+}
+
+/**
+ * github.com's page-load bar while another commit range loads (3px at the top; the page stays as
+ * it is until the new changes are there). It fills in like Turbo's: 10% after a moment, creeping
+ * on, then full and fading out once loaded. A quick load never shows it.
+ */
+function ProgressBar() {
+  const active = useStore((st) => st.loading && !!st.snapshot)
+  const [value, setValue] = useState<number | null>(null)
+  useEffect(() => {
+    if (!active) {
+      setValue((v) => (v === null ? null : 1))
+      const hide = setTimeout(() => setValue(null), 450)
+      return () => clearTimeout(hide)
+    }
+    let trickle: ReturnType<typeof setInterval> | undefined
+    const show = setTimeout(() => {
+      setValue(0.1)
+      trickle = setInterval(() => setValue((v) => (v === null ? null : Math.min(v + Math.random() / 100, 0.9))), 300)
+    }, 150)
+    return () => {
+      clearTimeout(show)
+      clearInterval(trickle)
+    }
+  }, [active])
+  if (value === null) return null
+  return <div className={`ProgressBar ${value >= 1 ? 'is-done' : ''}`} style={{ transform: `scaleX(${value})` }} aria-hidden />
 }
 
 /** Native window: Cmd/Ctrl + `=` / `-` / `0` zoom like a browser, and the level is kept. */

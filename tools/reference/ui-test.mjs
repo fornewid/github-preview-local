@@ -480,11 +480,20 @@ await check("native views (fake bridge): a commit's title opens Files changed fo
   await p.waitForTimeout(400)
   const title = p.locator('a.CommitRow-title').first()
   const sha = await p.locator('a.CommitRow-sha').first().textContent()
+  // While the commit loads (slowed down here), the Commits tab stays under the progress bar, like
+  // github.com: Files changed never shows the previous diff as if it were the commit's.
+  await p.evaluate(() => (window.__prvSlowRange = 1200))
   await title.click()
-  await p.waitForTimeout(800)
+  await p.waitForTimeout(600)
+  const during = await p.evaluate(() => ({ tab: window.__prv.getState().tab, bar: !!document.querySelector('.ProgressBar:not(.is-done)'), rows: document.querySelectorAll('.CommitRow').length }))
+  assert(during.tab === 'commits' && during.bar && during.rows > 0, `while loading: ${JSON.stringify(during)}`)
+  await p.waitForTimeout(1200)
   const state = await p.evaluate(() => ({ tab: window.__prv.getState().tab, from: window.__prv.getState().range.from }))
-  assert(state.tab === 'files' && state.from?.startsWith(sha.trim()), `after the click: ${JSON.stringify(state)}`)
+  assert(state.tab === 'files' && state.from?.startsWith(sha.trim()), `after loading: ${JSON.stringify(state)}`)
   assert((await p.locator('.CommitPicker-button').textContent()).trim() === sha.trim(), 'the commit picker shows the commit')
+  await p.waitForTimeout(500)
+  assert(!(await p.locator('.ProgressBar').count()), 'the progress bar is gone once loaded')
+  await p.evaluate(() => (window.__prvSlowRange = 0))
   // The conversation timeline links its commits too.
   await p.getByRole('link', { name: /^Conversation/ }).click()
   await p.waitForTimeout(400)

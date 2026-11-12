@@ -62,7 +62,8 @@ page, so the reference is captured with a signed-in Chrome profile (see
 | Inline form | box with avatar + *Add a comment on line L18*, buttons *Cancel*, *Comment*, *Start a review* (*Add review comment* once a review is pending) |
 | Finish your review | `AnchoredOverlay` 640px, title 14px semibold, body padding 16px, radio options 14px semibold + 12px captions (47px apart), footer *Cancel* / *Submit review* with ⌘⏎ hint |
 | Settings menu | *Layout* (Unified / Split) · *Whitespace changes* submenu (Always show / Always hide / Hide for this diff only) · *Minimize comments* (`i`) · *Compact line height* |
-| Commit picker | `Dialog` 480 × 640: *All commits*, *Changes since your last review*, *Select a range of commits* (checkbox list) |
+| Commit picker | `Dialog` 480 × 640: *All commits*, *Changes since your last review* (a `listbox`: the selected one has a check mark), *Select a range of commits* (checkbox list) |
+| Opening a commit or range | the current tab stays as it is until the commit's changes are loaded, under Turbo's progress bar: fixed at the top, 3px, `#0076ff`, at 10% after ~150ms and creeping on, then full and fading out (`transform 0.3s`, `opacity 0.15s` after 0.15s); then Files changed shows it |
 
 ## Widths and zoom
 
@@ -103,5 +104,8 @@ media queries without a `change` event, so gh-prv-local also re-checks on `resiz
   is written in *Confirm*; checks are in the Checks tab and with conflicts on Conversation.
 - Conversation and Commits keep github.com's `container-xl` width but start at the same left edge
   as Files changed, so the title and the tabs do not move between tabs (github.com centers them).
+- Popups are roomier when the window has room: the commit picker is as wide as its longest commit
+  title (480px, github.com's width, up to 960px) and menus are at least 256px (github.com: 192px,
+  or as wide as their items).
 - Find (Cmd/Ctrl + F): github.com leaves it to the browser; here the diffs are not all on the page
   and the native window has no find bar, so gh-prv-local has its own (a browser's colors).
