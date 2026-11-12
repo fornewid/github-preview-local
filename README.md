@@ -56,18 +56,25 @@ do those rounds locally, in the same UI, and only push once the change is right.
 
 ## Install
 
-Requirements: `git`. To build from source: Rust (`rustup`) and Node.js 20+.
-To open pull requests: the [GitHub CLI](https://cli.github.com) (`gh auth login`, works with
-GitHub Enterprise Server hosts too).
+macOS and Linux:
 
 ```bash
-git clone https://github.com/fornewid/github-preview-local.git
-cd github-preview-local
-./scripts/install.sh  # builds and installs ~/.local/bin/gh-prv-local
+curl -fsSL https://raw.githubusercontent.com/fornewid/github-preview-local/main/scripts/install.sh | bash
+# or with the GitHub CLI signed in (also while the repository is private):
+gh api repos/fornewid/github-preview-local/contents/scripts/install.sh -H 'Accept: application/vnd.github.raw' | bash
 ```
 
-Linux needs the WebKitGTK runtime (`libwebkit2gtk-4.1`); Windows uses WebView2 (preinstalled on
-Windows 10/11).
+This installs the latest [release](https://github.com/fornewid/github-preview-local/releases)'s
+binary to `~/.local/bin/gh-prv-local` after checking its SHA-256. Run it again to update, or pin a
+version with `| bash -s -- v0.1.0`; gh-prv-local itself never checks for updates. On Windows,
+download `gh-prv-local-windows-x64.exe` from the release and save it as `gh-prv-local.exe` in a
+folder on your `PATH`.
+
+Requirements: `git`. To open pull requests: the [GitHub CLI](https://cli.github.com)
+(`gh auth login`, works with GitHub Enterprise Server hosts too). Linux needs the WebKitGTK runtime
+(`libwebkit2gtk-4.1`); Windows uses WebView2 (preinstalled on Windows 10/11).
+
+From source (Rust and Node.js 20+): `./scripts/install.sh --source` in a clone.
 
 ### Claude Code plugin
 
@@ -196,6 +203,13 @@ node docgifs.mjs path/to/export.html                  # the README animations (n
 The page is compared with the signed-in github.com page using the tools in `tools/reference`;
 see [docs/design-sync.md](docs/design-sync.md) and the measured values in
 [docs/reference.md](docs/reference.md).
+
+### Releasing
+
+`scripts/release.sh X.Y.Z` sets the version of the CLI and of the Claude Code plugin, commits and
+tags `vX.Y.Z`. Pushing `main` and the tag runs [the release workflow](.github/workflows/release.yml):
+tests, then binaries for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64), each with a
+`.sha256`, published as the GitHub release.
 
 ## License
 

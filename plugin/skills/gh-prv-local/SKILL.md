@@ -11,6 +11,9 @@ file tree, viewed files, expandable context). The user reviews it in a native wi
 served over HTTP, and gh-prv-local talks to the repository's `origin` only: it fetches the base branch, looks
 up an open pull request on origin's GitHub host, and pushes only when the user presses **Confirm**.
 
+If the command is not found, the CLI is not installed: point the user to the install steps,
+https://github.com/fornewid/github-preview-local#install
+
 ## Run it
 
 The window stays open until the user submits a review, which can take longer than a foreground
