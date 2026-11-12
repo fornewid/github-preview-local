@@ -56,27 +56,50 @@ fn asset(os: &str, arch: &str) -> Result<&'static str, String> {
     })
 }
 
-/// `0.2.1` or `v0.2.1` → `v0.2.1`. Only a version: it goes into a URL and a `gh` argument.
+/// `0.2.1` or `v0.2.1` → `v0.2.1`: MAJOR.MINOR.PATCH with an optional `-PRERELEASE` (dot-separated
+/// letters, digits and hyphens). Only a version: it goes into a URL and a `gh` argument.
 fn tag(v: &str) -> Result<String, String> {
     let v = v.trim();
     let bare = v.strip_prefix('v').unwrap_or(v);
-    let mut parts = bare.split(['.', '-']);
-    let numbered = (0..3).all(|_| parts.next().is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())));
-    if !numbered || !bare.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
+    let (core, pre) = bare.split_once('-').map_or((bare, None), |(c, p)| (c, Some(p)));
+    let numbers: Vec<&str> = core.split('.').collect();
+    let numeric = numbers.len() == 3 && numbers.iter().all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    let pre_ok = pre.is_none_or(|p| p.split('.').all(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')));
+    if !numeric || !pre_ok {
         return Err(format!("not a version: {v} (for example 0.2.1 or v0.2.1)"));
     }
     Ok(format!("v{bare}"))
 }
 
-/// Whether tag `a` is a later version than tag `b` (both from `tag`): by their numbers, and a
-/// prerelease (`v1.0.0-rc.1`) comes before its release.
+/// Whether tag `a` is a later version than tag `b` (both from `tag`), in semantic versioning's
+/// order: the numbers, then a prerelease before its release, prereleases by their dot-separated
+/// parts (numbers as numbers, below words; fewer parts first when the rest is equal).
 fn newer(a: &str, b: &str) -> bool {
-    fn key(t: &str) -> (Vec<u64>, bool) {
+    use std::cmp::Ordering;
+    fn split(t: &str) -> (Vec<u64>, Option<&str>) {
         let t = t.trim_start_matches('v');
-        let (numbers, pre) = t.split_once('-').map_or((t, false), |(n, _)| (n, true));
-        (numbers.split('.').map(|n| n.parse().unwrap_or(0)).collect(), !pre)
+        let (core, pre) = t.split_once('-').map_or((t, None), |(c, p)| (c, Some(p)));
+        (core.split('.').map(|n| n.parse().unwrap_or(0)).collect(), pre)
     }
-    key(a) > key(b)
+    fn part(x: &str, y: &str) -> Ordering {
+        match (x.parse::<u64>(), y.parse::<u64>()) {
+            (Ok(m), Ok(n)) => m.cmp(&n),
+            (Ok(_), Err(_)) => Ordering::Less,
+            (Err(_), Ok(_)) => Ordering::Greater,
+            _ => x.cmp(y),
+        }
+    }
+    let ((na, pa), (nb, pb)) = (split(a), split(b));
+    let order = na.cmp(&nb).then_with(|| match (pa, pb) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(x), Some(y)) => {
+            let (xs, ys): (Vec<_>, Vec<_>) = (x.split('.').collect(), y.split('.').collect());
+            xs.iter().zip(&ys).map(|(p, q)| part(p, q)).find(|o| o.is_ne()).unwrap_or(xs.len().cmp(&ys.len()))
+        }
+    });
+    order == Ordering::Greater
 }
 
 fn gh_signed_in() -> bool {
@@ -125,6 +148,8 @@ fn latest(gh: bool) -> Result<String, String> {
                 "-fsSIL",
                 "--proto",
                 "=https",
+                "--proto-redir",
+                "=https",
                 "-o",
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
                 "-w",
@@ -150,7 +175,7 @@ fn download(gh: bool, tag: &str, asset: &str, dir: &Path) -> Result<(), String> 
             for name in [asset, sum.as_str()] {
                 tool(
                     Command::new("curl")
-                        .args(["-fsSL", "--proto", "=https", "-o"])
+                        .args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "-o"])
                         .arg(dir.join(name))
                         .arg(format!("https://github.com/{REPO}/releases/download/{tag}/{name}")),
                 )?;
@@ -264,15 +289,11 @@ fn swap(staged: &Path, exe: &Path) -> Result<(), String> {
     })
 }
 
-/// `claude` (on Windows through cmd, which also finds an npm install's claude.cmd).
+/// `claude`, found the way Rust finds programs (on Windows: a `claude.exe` on PATH, never one in
+/// the current folder, which may be a repository you do not trust; an npm install's claude.cmd is
+/// left alone, and the plugin is then updated by hand).
 fn claude(args: &[&str]) -> Command {
-    let mut c = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "claude"]);
-        c
-    } else {
-        Command::new("claude")
-    };
+    let mut c = Command::new("claude");
     c.args(args).stdin(Stdio::null());
     c
 }
@@ -280,18 +301,18 @@ fn claude(args: &[&str]) -> Command {
 /// The Claude Code plugin (`/gh-prv-local`) comes from this repository's marketplace: when it is
 /// installed, it is updated too (Claude Code applies it after a restart).
 fn update_plugin() {
+    // Run with sudo (to replace a binary in a system folder), claude would see root's setup or
+    // leave root-owned files in your ~/.claude: it is not run at all.
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        println!("If you use the Claude Code plugin, update it as yourself (not as root):\n  claude plugin marketplace update {MARKETPLACE}\n  claude plugin update {PLUGIN}");
+        return;
+    }
     let listed = claude(&["plugin", "list", "--json"]).stderr(Stdio::null()).output();
     let Some(scope) = listed.ok().and_then(|o| installed_scope(&String::from_utf8_lossy(&o.stdout))) else {
         return;
     };
     let by_hand = format!("  claude plugin marketplace update {MARKETPLACE}\n  claude plugin update {PLUGIN} --scope {scope}");
-    // Run with sudo (to replace a binary in a system folder), it would leave root-owned files in
-    // your ~/.claude.
-    #[cfg(unix)]
-    if unsafe { libc::geteuid() } == 0 {
-        println!("Update the Claude Code plugin as yourself (not as root) with:\n{by_hand}");
-        return;
-    }
     let ok = |args: &[&str]| claude(args).status().is_ok_and(|s| s.success());
     if ok(&["plugin", "marketplace", "update", MARKETPLACE]) && ok(&["plugin", "update", PLUGIN, "--scope", &scope]) {
         println!("Restart Claude Code to use the updated /gh-prv-local plugin.");
@@ -300,11 +321,13 @@ fn update_plugin() {
     }
 }
 
-/// The scope (user, project, …) the plugin is installed in, from `claude plugin list --json`.
+/// The scope the plugin is installed in (user, project, local, managed), from `claude plugin list
+/// --json`.
 fn installed_scope(list: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(list).ok()?;
     let p = v.as_array()?.iter().find(|p| p["id"] == PLUGIN)?;
-    Some(p["scope"].as_str().unwrap_or("user").to_string())
+    let scope = p["scope"].as_str().unwrap_or("user");
+    ["user", "project", "local", "managed"].contains(&scope).then(|| scope.to_string())
 }
 
 fn random_hex() -> Result<String, String> {
@@ -356,7 +379,7 @@ mod tests {
         assert_eq!(tag("0.2.1").unwrap(), "v0.2.1");
         assert_eq!(tag(" v1.10.0 ").unwrap(), "v1.10.0");
         assert_eq!(tag("v1.0.0-rc.1").unwrap(), "v1.0.0-rc.1");
-        for bad in ["", "v", "latest", "1.2", "v1..2", "1.2.3/../x", "1.2.3 x", "-1.2.3"] {
+        for bad in ["", "v", "latest", "1.2", "v1..2", "1.2.3/../x", "1.2.3 x", "-1.2.3", "1-2-3", "1.2-3", "0.2.1.", "0.2.1-", "1.2.3-rc..1", "1.2.3.4"] {
             assert!(tag(bad).is_err(), "{bad:?}");
         }
     }
@@ -370,6 +393,12 @@ mod tests {
         assert!(!newer("v0.2.1", "v0.2.1"));
         assert!(!newer("v0.2.1", "v0.2.2"));
         assert!(!newer("v1.0.0-rc.1", "v1.0.0"));
+        assert!(newer("v1.0.0-rc.2", "v1.0.0-rc.1"));
+        assert!(newer("v1.0.0-rc.10", "v1.0.0-rc.9"));
+        assert!(newer("v1.0.0-rc.1", "v1.0.0-beta.2"));
+        assert!(newer("v1.0.0-alpha.1", "v1.0.0-alpha"));
+        assert!(newer("v1.0.0-alpha.beta", "v1.0.0-alpha.1"));
+        assert!(!newer("v1.0.0-rc.1", "v1.0.0-rc.1"));
     }
 
     #[test]
@@ -445,6 +474,7 @@ mod tests {
         let list = r#"[{"id":"other@x","scope":"user"},{"id":"gh-prv-local@github-preview-local","scope":"project"}]"#;
         assert_eq!(installed_scope(list).as_deref(), Some("project"));
         assert_eq!(installed_scope(r#"[{"id":"other@x","scope":"user"}]"#), None);
+        assert_eq!(installed_scope(r#"[{"id":"gh-prv-local@github-preview-local","scope":"user & calc"}]"#), None);
         assert_eq!(installed_scope("not json"), None);
     }
 }
