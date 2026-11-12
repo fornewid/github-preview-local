@@ -36,9 +36,16 @@ createRoot(document.getElementById('root')!).render(
 function keepThePage(kind: Transport['kind']) {
   document.addEventListener('click', (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return
-    const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
-    if (!a || (a.getAttribute('href') ?? '').startsWith('#')) return
-    const url = new URL(a.href, location.href)
+    const a = (e.target as Element | null)?.closest?.('a[href]')
+    const href = a?.getAttribute('href') ?? ''
+    if (!a || href.startsWith('#')) return
+    let url: URL
+    try {
+      url = new URL(href, location.href)
+    } catch {
+      // Not an address at all: going nowhere.
+      return e.preventDefault()
+    }
     if (url.protocol === 'mailto:') return
     if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) {
       if (kind === 'native') return

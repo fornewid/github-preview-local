@@ -49,10 +49,14 @@ pub fn data_json(git: &Git, r: &Resolved) -> serde_json::Value {
                 continue;
             }
             // As base64 (4/3 of the bytes); an image that does not fit is left out (the page says so).
-            if total + size.unwrap_or(0) as usize * 4 / 3 > MAX_TOTAL_CONTENT {
+            let estimate = size.map_or(0, |n| n.saturating_mul(4) / 3);
+            if (total as u64).saturating_add(estimate) > MAX_TOTAL_CONTENT as u64 {
                 continue;
             }
             if let Some(url) = image(git, &r.ends, &s.files, &path, side) {
+                if total + url.len() > MAX_TOTAL_CONTENT {
+                    continue;
+                }
                 total += url.len();
                 images.insert(format!("{side}:{path}"), url);
             }

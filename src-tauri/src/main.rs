@@ -122,6 +122,10 @@ struct AppState {
     check_runs: Arc<Mutex<HashMap<String, CheckRun>>>,
     /// One write of the state file at a time (a browser tab's saves arrive on several threads).
     state_lock: Mutex<()>,
+    /// One snapshot at a time, so a slower one never replaces a newer one.
+    snapshot_lock: Mutex<()>,
+    /// The review was taken: later saves (still on their way) must not bring its comments back.
+    submitted: AtomicBool,
 }
 
 #[derive(Clone, Default, serde::Serialize)]
@@ -152,6 +156,8 @@ impl AppState {
             running: Arc::new(Mutex::new(HashMap::new())),
             check_runs: Arc::new(Mutex::new(HashMap::new())),
             state_lock: Mutex::new(()),
+            snapshot_lock: Mutex::new(()),
+            submitted: AtomicBool::new(false),
         }
     }
 
@@ -171,12 +177,14 @@ impl AppState {
             return Err("load the full comparison first".into());
         }
         let range = RangeInfo { from, to };
+        let _one = self.snapshot_lock.lock().map_err(|e| e.to_string())?;
         let mut opts = self.opts.clone();
-        // Fetch only once, on the first load.
-        if self.loaded_once.swap(true, Ordering::SeqCst) {
+        // Fetch until a load has succeeded once.
+        if self.loaded_once.load(Ordering::SeqCst) {
             opts.fetch = false;
         }
         let r = git::snapshot(&self.git, &opts, &range)?;
+        self.loaded_once.store(true, Ordering::SeqCst);
         let snap = r.snapshot.clone();
         *self.current.lock().map_err(|e| e.to_string())? = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
         Ok(snap)
@@ -197,8 +205,14 @@ impl AppState {
     }
 
     fn save_state(&self, state: &serde_json::Value) -> Result<(), String> {
+        if !state.is_object() {
+            return Err("the state must be an object".into());
+        }
         let Some(cur) = self.current() else { return Ok(()) };
         let _one = self.state_lock.lock().map_err(|e| e.to_string())?;
+        if self.submitted.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         write_state(&self.state_dir, &cur.snapshot.head.name, state)
     }
 
@@ -226,6 +240,7 @@ impl AppState {
         let root = self.git.root.clone();
         let running = self.running.clone();
         let runs = self.check_runs.clone();
+        let name = def.name.clone();
         std::thread::spawn(move || {
             let event = |status: Option<&str>, chunk: Option<&str>, code: Option<i32>| {
                 // Sent while the record is locked: a page that joins now (serve.rs) finds each
@@ -247,6 +262,13 @@ impl AppState {
                         }
                     }
                 }
+                // Finished: free to run again only now, after its result is recorded, so a new
+                // run never gets this one's result.
+                if status.is_some_and(|s| s != "running") {
+                    if let Ok(mut running) = running.lock() {
+                        running.remove(&name);
+                    }
+                }
                 emit(serde_json::json!({ "name": def.name, "status": status, "chunk": chunk, "exitCode": code }))
             };
             event(Some("running"), None, None);
@@ -259,9 +281,6 @@ impl AppState {
             } else {
                 "failure"
             };
-            if let Ok(mut running) = running.lock() {
-                running.remove(&def.name);
-            }
             event(Some(status), None, code);
         });
         Ok(())
@@ -288,9 +307,12 @@ impl AppState {
     fn submit(&self, result: serde_json::Value, markdown: String) {
         // Submitted comments must not come back as pending drafts next time.
         if let (Some(cur), Ok(_one)) = (self.current(), self.state_lock.lock()) {
+            self.submitted.store(true, Ordering::SeqCst);
             if let Some(mut st) = read_state(&self.state_dir, &cur.snapshot.head.name) {
-                st["drafts"] = serde_json::json!([]);
-                let _ = write_state(&self.state_dir, &cur.snapshot.head.name, &st);
+                if let Some(obj) = st.as_object_mut() {
+                    obj.insert("drafts".into(), serde_json::json!([]));
+                    let _ = write_state(&self.state_dir, &cur.snapshot.head.name, &st);
+                }
             }
         }
         if let Ok(mut r) = self.result.lock() {
@@ -313,7 +335,15 @@ impl AppState {
         }
         let f = self.git.root.join(path).to_string_lossy().into_owned();
         let target = format!("{f}:1");
-        let spawn = |prog: &str, args: &[&str]| std::process::Command::new(prog).args(args).spawn().is_ok();
+        // Not on our stdout (the review printed there is what the caller reads; an editor still
+        // open would also keep it from ending), not in our process group.
+        let spawn = |prog: &str, args: &[&str]| {
+            use std::process::Stdio;
+            let mut cmd = std::process::Command::new(prog);
+            cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            proc::own_group(&mut cmd);
+            cmd.spawn().is_ok()
+        };
         if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
             if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {
                 return Ok(());

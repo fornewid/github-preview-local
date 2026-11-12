@@ -60,11 +60,18 @@ export function FindBar({ files }: { files: FileDiff[] }) {
   // typing pauses (each match it passes may open a file). Other changes, such as a file marked
   // viewed, keep the current match.
   const searched = useRef('')
-  /** The first match at or below the top of the window. */
+  /** The first match at or below the top of the window (inside the file there, by its line). */
   const firstBelowTop = () => {
     const order = new Map(files.map((f, i) => [f.path, i]))
     const top = files.findIndex((f) => (document.getElementById(anchorFor(f.path))?.getBoundingClientRect().bottom ?? 0) > 80)
-    return Math.max(0, matches.findIndex((m) => (order.get(m.path) ?? 0) >= top))
+    const below = (m: FindMatch) => {
+      const at = order.get(m.path) ?? 0
+      if (at !== top) return at > top
+      const cell = matchCell(m)
+      return !cell || cell.getBoundingClientRect().top >= 80
+    }
+    const first = matches.findIndex(below)
+    return first >= 0 ? first : 0
   }
   // The pending first jump of a new search; a step (Enter, Cmd+G) cancels it.
   const jump = useRef(0)

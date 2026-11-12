@@ -24,6 +24,11 @@ const MAX_BODY: usize = 32 * 1024 * 1024;
 /// well within it).
 const GONE_AFTER: Duration = Duration::from_secs(15);
 const HEARTBEAT: Duration = Duration::from_secs(5);
+/// A response (or a line of the event stream) not taken in this long ends the connection.
+const WRITE_TIME: Duration = Duration::from_secs(20);
+/// Event lines waiting for a slow page; a page further behind is dropped (it reconnects and
+/// catches up from the record).
+const STREAM_BACKLOG: usize = 4096;
 /// Connections handled at once (a page needs a few); more are turned away.
 const MAX_CONNECTIONS: usize = 64;
 /// No page ever opened by then (no browser, an address never visited): the run ends as closed.
@@ -39,7 +44,7 @@ struct Server {
     launch: Mutex<Option<String>>,
     port: u16,
     /// Open event streams (one per page).
-    streams: Mutex<Vec<mpsc::Sender<String>>>,
+    streams: Mutex<Vec<mpsc::SyncSender<String>>>,
     pages: AtomicUsize,
     connections: AtomicUsize,
     seen_page: AtomicBool,
@@ -49,7 +54,9 @@ struct Server {
 }
 
 pub fn run(state: Arc<AppState>, browser: &str) -> ! {
-    let port = std::env::var("GH_PRV_LOCAL_PORT").ok().and_then(|p| p.parse().ok());
+    let port = std::env::var("GH_PRV_LOCAL_PORT")
+        .ok()
+        .map(|p| p.trim().parse::<u16>().unwrap_or_else(|_| fail(format!("GH_PRV_LOCAL_PORT is not a port: {p}"))));
     let listener = match port {
         Some(p) => TcpListener::bind(("127.0.0.1", p)).unwrap_or_else(|e| fail(format!("cannot listen on 127.0.0.1:{p}: {e}"))),
         None => TcpListener::bind(("127.0.0.1", DEFAULT_PORT))
@@ -73,13 +80,17 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
     let code = srv.launch.lock().ok().and_then(|c| c.clone()).unwrap_or_default();
     let url = format!("http://127.0.0.1:{port}/?code={code}");
     eprintln!("gh-prv-local: reviewing in the browser at {url}");
-    open_browser(&url, browser);
-    let started = Instant::now();
-    let mut reminded = false;
     {
         let srv = srv.clone();
         proc::on_terminate(move || srv.interrupted.store(true, Ordering::SeqCst));
     }
+    // On its own thread: a browser slow to answer must not keep the server from taking requests.
+    {
+        let (url, browser) = (url.clone(), browser.to_string());
+        std::thread::spawn(move || open_browser(&url, &browser));
+    }
+    let started = Instant::now();
+    let mut reminded = false;
     let _ = listener.set_nonblocking(true);
     loop {
         if srv.submitted.load(Ordering::SeqCst) || srv.interrupted.load(Ordering::SeqCst) {
@@ -131,6 +142,10 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
             }
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
+    }
+    if srv.submitted.load(Ordering::SeqCst) {
+        // Let the submitting page's answer leave before the sockets go.
+        std::thread::sleep(Duration::from_millis(200));
     }
     srv.state.finish();
     std::process::exit(if srv.interrupted.load(Ordering::SeqCst) { 130 } else { 0 })
@@ -262,22 +277,25 @@ fn read_request(stream: &TcpStream) -> Option<(Request, Vec<u8>)> {
     Some((Request { method, path, headers, body: vec![] }, buffered))
 }
 
-/// The body (`Content-Length` bytes), after what came with the headers.
-fn read_body(stream: &TcpStream, req: &mut Request, buffered: Vec<u8>) -> Option<()> {
-    let len: usize = req.header("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+/// The body (`Content-Length` bytes), after what came with the headers; else the response status.
+fn read_body(stream: &TcpStream, req: &mut Request, buffered: Vec<u8>) -> Result<(), &'static str> {
+    let len: usize = match req.header("content-length") {
+        None => 0,
+        Some(v) => v.trim().parse().map_err(|_| "400 Bad Request")?,
+    };
     if len > MAX_BODY {
-        return None;
+        return Err("413 Content Too Large");
     }
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut body = buffered;
     body.truncate(len);
     if body.len() < len {
         let mut rest = vec![0; len - body.len()];
-        (&*stream).read_exact(&mut rest).ok()?;
+        (&*stream).read_exact(&mut rest).map_err(|_| "408 Request Timeout")?;
         body.extend(rest);
     }
     req.body = body;
-    Some(())
+    Ok(())
 }
 
 fn respond(mut stream: &TcpStream, status: &str, kind: &str, body: &[u8], extra: &[(&str, &str)]) {
@@ -310,11 +328,15 @@ fn csp() -> String {
 
 impl Server {
     fn handle(self: &Arc<Self>, stream: TcpStream) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = stream.set_write_timeout(Some(WRITE_TIME));
         let Some((mut req, buffered)) = read_request(&stream) else { return };
-        let here = [format!("127.0.0.1:{}", self.port), format!("localhost:{}", self.port)];
-        let host_ok = req.header("host").is_some_and(|h| here.iter().any(|x| x == h));
-        let origin_ok = req.header("origin").is_none_or(|o| here.iter().any(|x| o == format!("http://{x}")));
+        // Host names compare without case; port 80 may be left out.
+        let mut here = vec![format!("127.0.0.1:{}", self.port), format!("localhost:{}", self.port)];
+        if self.port == 80 {
+            here.extend(["127.0.0.1".to_string(), "localhost".to_string()]);
+        }
+        let host_ok = req.header("host").is_some_and(|h| here.iter().any(|x| x.eq_ignore_ascii_case(h)));
+        let origin_ok = req.header("origin").is_none_or(|o| here.iter().any(|x| o.eq_ignore_ascii_case(&format!("http://{x}"))));
         // Calls from another site's page are refused too. The page itself holds no data (it gets it
         // through the calls), so it opens however the browser files the request from the system;
         // other pages cannot frame it (CSP frame-ancestors).
@@ -337,7 +359,12 @@ impl Server {
                     _ => None,
                 });
                 match traded {
-                    Some(_) => respond(&stream, "200 OK", "application/json", json!({ "ok": self.token }).to_string().as_bytes(), &[]),
+                    Some(_) => {
+                        // A page is here (until its event stream opens, this counts as it).
+                        self.seen_page.store(true, Ordering::SeqCst);
+                        self.touch();
+                        respond(&stream, "200 OK", "application/json", json!({ "ok": self.token }).to_string().as_bytes(), &[])
+                    }
                     None => respond(
                         &stream,
                         "401 Unauthorized",
@@ -353,13 +380,22 @@ impl Server {
                 if !req.header("x-prv-token").is_some_and(|t| same(t, &self.token)) {
                     return respond(&stream, "401 Unauthorized", "text/plain", b"no or wrong token", &[]);
                 }
-                if read_body(&stream, &mut req, buffered).is_none() {
-                    return respond(&stream, "413 Content Too Large", "text/plain", b"too large", &[]);
+                if let Err(status) = read_body(&stream, &mut req, buffered) {
+                    return respond(&stream, status, "text/plain", status.as_bytes(), &[]);
                 }
+                // Any call from the page shows it is still there.
+                self.touch();
                 match (method.as_str(), &path[5..]) {
                     ("GET", "events") => self.events(&stream),
                     ("POST", name) => {
-                        let args: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                        let args: Value = if req.body.is_empty() {
+                            Value::Null
+                        } else {
+                            match serde_json::from_slice(&req.body) {
+                                Ok(v) => v,
+                                Err(_) => return respond(&stream, "400 Bad Request", "text/plain", b"the body is not JSON", &[]),
+                            }
+                        };
                         let (status, body) = match self.call(name, &args) {
                             Ok(v) => ("200 OK", json!({ "ok": v })),
                             Err(e) => ("500 Internal Server Error", json!({ "error": e })),
@@ -367,6 +403,7 @@ impl Server {
                         respond(&stream, status, "application/json", body.to_string().as_bytes(), &[]);
                         // The review is printed once the page has its answer.
                         if name == "submit_review" && status.starts_with("200") {
+                            let _ = stream.shutdown(std::net::Shutdown::Write);
                             self.submitted.store(true, Ordering::SeqCst);
                         }
                     }
@@ -410,9 +447,17 @@ impl Server {
         }
     }
 
+    fn touch(&self) {
+        if let Ok(mut t) = self.last_page.lock() {
+            *t = Instant::now();
+        }
+    }
+
+    /// To every open page; a page too far behind is let go (its stream ends, it reconnects and
+    /// catches up from the record).
     fn broadcast(&self, line: String) {
         if let Ok(mut streams) = self.streams.lock() {
-            streams.retain(|tx| tx.send(line.clone()).is_ok());
+            streams.retain(|tx| tx.try_send(line.clone()).is_ok());
         }
     }
 
@@ -424,13 +469,13 @@ impl Server {
         if stream.write_all(head.as_bytes()).is_err() {
             return;
         }
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(STREAM_BACKLOG);
         {
             // First line: each check's run so far, taken with the stream added under the record's
             // lock (see AppState::run_check), so no output is both in it and on the stream.
             let runs = self.state.check_runs.lock();
             let record: Vec<_> = runs.as_ref().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
-            let _ = tx.send(json!({ "runs": record }).to_string());
+            let _ = tx.try_send(json!({ "runs": record }).to_string());
             if let Ok(mut streams) = self.streams.lock() {
                 streams.push(tx);
             }
@@ -447,9 +492,7 @@ impl Server {
                 break;
             }
         }
-        if let Ok(mut t) = self.last_page.lock() {
-            *t = Instant::now();
-        }
+        self.touch();
         self.pages.fetch_sub(1, Ordering::SeqCst);
     }
 }

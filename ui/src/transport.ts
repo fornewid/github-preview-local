@@ -150,7 +150,8 @@ async function createHttp(): Promise<Transport> {
     for (let attempt = 0; attempt < 3 && !body.ok && !body.error; attempt++) {
       try {
         const r = await fetch('/api/session', { method: 'POST', headers: { 'X-Prv-Code': code } })
-        body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }))
+        // An answer cut short (a reload, a dropped connection) is tried again like no answer.
+        body = (await r.json()) as typeof body
       } catch {
         await new Promise((r) => setTimeout(r, 500))
       }
@@ -176,6 +177,13 @@ async function createHttp(): Promise<Transport> {
   // Check progress, one JSON object per line, on a response that stays open while this tab does
   // (the CLI takes a closed tab as a closed window). Reopened after a hiccup.
   const listeners = new Set<(e: CheckEvent) => void>()
+  // Events from before the page listens (its stream opens first): handed to the first listener, in
+  // order, starting with the stream's catch-up line.
+  let early: CheckEvent[] | null = []
+  const deliver = (e: CheckEvent) => {
+    if (early) early.push(e)
+    else for (const l of listeners) l(e)
+  }
   let goneHandler: (() => void) | undefined
   let done = false
   void (async () => {
@@ -199,7 +207,7 @@ async function createHttp(): Promise<Transport> {
             // The first line: each check's run so far (catching up after a reload or a lost stream).
             const events: CheckEvent[] =
               'runs' in msg ? msg.runs.map(([name, run]) => ({ name, status: run.status, exitCode: run.exitCode, output: run.output })) : [msg]
-            for (const e of events) for (const l of listeners) l(e)
+            for (const e of events) deliver(e)
           }
         }
       } catch {
@@ -224,6 +232,11 @@ async function createHttp(): Promise<Transport> {
     findPr: async () => (await call<ExistingPr | null>('find_pr')) ?? null,
     onCheckEvent: (cb) => {
       listeners.add(cb)
+      if (early) {
+        const missed = early
+        early = null
+        for (const e of missed) cb(e)
+      }
       return () => listeners.delete(cb)
     },
     publish: (req) => call<PublishResult>('publish', { req }),

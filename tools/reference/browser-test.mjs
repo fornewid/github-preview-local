@@ -48,6 +48,8 @@ function start(port) {
   check('right token: 200', (await api({ 'X-Prv-Token': token })) === 200)
   check('another Origin: 403', (await api({ 'X-Prv-Token': token, Origin: 'https://evil.example' })) === 403)
   check('cross-site request: 403', (await api({ 'X-Prv-Token': token, 'Sec-Fetch-Site': 'cross-site' })) === 403)
+  const notJson = await fetch(origin + '/api/save_state', { method: 'POST', headers: { 'X-Prv-Token': token }, body: '{not json' })
+  check('a body that is not JSON: 400 (the state is left alone)', notJson.status === 400, String(notJson.status))
   // Host header (DNS rebinding): raw request, fetch cannot set Host.
   const net = await import('node:net')
   const rebound = await new Promise((res) => {

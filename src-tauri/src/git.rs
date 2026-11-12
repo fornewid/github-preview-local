@@ -1008,16 +1008,15 @@ fn find_side<'a>(files: &'a [FileDiff], path: &str, side: &str) -> Option<&'a Fi
     })
 }
 
-/// The bytes of that side of the file.
-fn side_bytes(git: &Git, ends: &DiffEnds, f: &FileDiff, path: &str, side: &str) -> Option<Vec<u8>> {
+/// The object of that side of the file: its blob id, else `<tree>:<path>`.
+fn side_object(ends: &DiffEnds, f: &FileDiff, path: &str, side: &str) -> String {
     let sha = if side == "old" { &f.old_sha } else { &f.new_sha };
-    match sha {
-        Some(s) => git.bytes(&["cat-file", "blob", s]).ok(),
-        None => {
-            let treeish = if side == "old" { &ends.a } else { &ends.b };
-            git.bytes(&["show", &format!("{treeish}:{path}")]).ok()
-        }
-    }
+    sha.clone().unwrap_or_else(|| format!("{}:{path}", if side == "old" { &ends.a } else { &ends.b }))
+}
+
+/// The bytes of that side of the file, as stored (`cat-file`, never a textconv filter).
+fn side_bytes(git: &Git, ends: &DiffEnds, f: &FileDiff, path: &str, side: &str) -> Option<Vec<u8>> {
+    git.bytes(&["cat-file", "blob", &side_object(ends, f, path, side)]).ok()
 }
 
 /// Full file contents for highlighting and context expansion.
@@ -1034,8 +1033,15 @@ pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side
 pub fn image(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side: &str) -> Option<String> {
     let f = find_side(files, path, side)?;
     let mime = image_mime(path)?;
-    let size = if side == "old" { f.old_size } else { f.new_size };
-    if !f.binary || f.submodule || size.is_some_and(|n| n as usize > MAX_IMAGE_BYTES) {
+    if !f.binary || f.submodule {
+        return None;
+    }
+    // The size before the bytes: a huge file is never read.
+    let size = match if side == "old" { f.old_size } else { f.new_size } {
+        Some(n) => n,
+        None => git.line(&["cat-file", "-s", &side_object(ends, f, path, side)])?.trim().parse().ok()?,
+    };
+    if size > MAX_IMAGE_BYTES as u64 {
         return None;
     }
     let bytes = side_bytes(git, ends, f, path, side)?;
