@@ -2,9 +2,11 @@
 //! asked for), checked against the release's SHA-256 file and started once (`--version`) before it
 //! goes in place, then updates the Claude Code plugin if it is installed. It runs only when asked:
 //! gh-prv-local never checks for updates by itself. Releases come from github.com through `gh`
-//! when it is signed in there (which also reaches a private repository), else `curl`.
+//! when it is signed in there (which also reaches a private repository), else (or when `gh`
+//! fails, say with a stale token) `curl`.
 
 use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -22,6 +24,9 @@ pub fn run(version: Option<&str>) -> Result<(), String> {
     };
     if tag == current {
         println!("gh-prv-local {current} is {}.", if version.is_some() { "already installed" } else { "the latest release" });
+    } else if version.is_none() && newer(&current, &tag) {
+        // A prerelease installed by name: a plain `update` does not go back to the last release.
+        println!("gh-prv-local {current} is newer than the latest release, {tag} (`gh-prv-local update {}` installs it).", &tag[1..]);
     } else {
         let exe = std::env::current_exe()
             .and_then(|p| p.canonicalize())
@@ -29,10 +34,10 @@ pub fn run(version: Option<&str>) -> Result<(), String> {
         let tmp = TempDir::new()?;
         println!("Downloading gh-prv-local {tag} ({asset})…");
         download(gh, &tag, asset, &tmp.0).map_err(|e| format!("{e}: cannot download {asset} of gh-prv-local {tag}"))?;
-        let file = tmp.0.join(asset);
-        verify(&file, &std::fs::read_to_string(tmp.0.join(format!("{asset}.sha256"))).unwrap_or_default())?;
-        check_starts(&file, &tag)?;
-        replace(&file, &exe)?;
+        // Read once: the bytes checked are the bytes installed (nothing reads the download again).
+        let bytes = std::fs::read(tmp.0.join(asset)).map_err(|e| format!("cannot read the download: {e}"))?;
+        verify(&bytes, &std::fs::read_to_string(tmp.0.join(format!("{asset}.sha256"))).unwrap_or_default())?;
+        install(&bytes, &exe, &tag)?;
         println!("Updated {} from {current} to {tag}.", exe.display());
     }
     update_plugin();
@@ -63,6 +68,17 @@ fn tag(v: &str) -> Result<String, String> {
     Ok(format!("v{bare}"))
 }
 
+/// Whether tag `a` is a later version than tag `b` (both from `tag`): by their numbers, and a
+/// prerelease (`v1.0.0-rc.1`) comes before its release.
+fn newer(a: &str, b: &str) -> bool {
+    fn key(t: &str) -> (Vec<u64>, bool) {
+        let t = t.trim_start_matches('v');
+        let (numbers, pre) = t.split_once('-').map_or((t, false), |(n, _)| (n, true));
+        (numbers.split('.').map(|n| n.parse().unwrap_or(0)).collect(), !pre)
+    }
+    key(a) > key(b)
+}
+
 fn gh_signed_in() -> bool {
     Command::new("gh")
         .args(["auth", "token", "--hostname", "github.com"])
@@ -87,72 +103,136 @@ fn tool(cmd: &mut Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// `gh` first when it is signed in; `curl` if it fails (a stored token may be stale, and the
+/// repository is public).
+fn gh_or_curl<T>(gh: bool, with_gh: impl FnOnce() -> Result<T, String>, with_curl: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    if gh {
+        match with_gh() {
+            Ok(v) => return Ok(v),
+            Err(e) => eprintln!("gh-prv-local: {e}; trying curl"),
+        }
+    }
+    with_curl()
+}
+
 fn latest(gh: bool) -> Result<String, String> {
-    let unreachable = |e: String| format!("{e}: cannot read the latest release of github.com/{REPO} (sign in with `gh auth login` if it is private)");
-    let found = if gh {
-        tool(Command::new("gh").args(["release", "view", "--repo", &format!("github.com/{REPO}"), "--json", "tagName", "--jq", ".tagName"])).map_err(unreachable)?
-    } else {
-        // The latest release's page redirects to its tag.
-        let url = tool(Command::new("curl").args([
-            "-fsSIL",
-            "--proto",
-            "=https",
-            "-o",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-            "-w",
-            "%{url_effective}",
-            &format!("https://github.com/{REPO}/releases/latest"),
-        ]))
-        .map_err(unreachable)?;
-        url.rsplit('/').next().unwrap_or_default().to_string()
-    };
+    let found = gh_or_curl(
+        gh,
+        || tool(Command::new("gh").args(["release", "view", "--repo", &format!("github.com/{REPO}"), "--json", "tagName", "--jq", ".tagName"])),
+        || {
+            // The latest release's page redirects to its tag.
+            let url = tool(Command::new("curl").args([
+                "-fsSIL",
+                "--proto",
+                "=https",
+                "-o",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+                "-w",
+                "%{url_effective}",
+                &format!("https://github.com/{REPO}/releases/latest"),
+            ]))?;
+            Ok(url.rsplit('/').next().unwrap_or_default().to_string())
+        },
+    )
+    .map_err(|e| format!("{e}: cannot read the latest release of github.com/{REPO} (sign in with `gh auth login` if it is private)"))?;
     tag(&found).map_err(|_| format!("cannot tell the latest release (got {found:?})"))
 }
 
 fn download(gh: bool, tag: &str, asset: &str, dir: &Path) -> Result<(), String> {
     let sum = format!("{asset}.sha256");
-    if gh {
-        tool(Command::new("gh").args(["release", "download", tag, "--repo", &format!("github.com/{REPO}"), "--pattern", asset, "--pattern", &sum]).arg("--dir").arg(dir))?;
-        return Ok(());
-    }
-    for name in [asset, sum.as_str()] {
-        tool(
-            Command::new("curl")
-                .args(["-fsSL", "--proto", "=https", "-o"])
-                .arg(dir.join(name))
-                .arg(format!("https://github.com/{REPO}/releases/download/{tag}/{name}")),
-        )?;
-    }
-    Ok(())
+    gh_or_curl(
+        gh,
+        || {
+            let repo = format!("github.com/{REPO}");
+            tool(Command::new("gh").args(["release", "download", tag, "--repo", &repo, "--clobber", "--pattern", asset, "--pattern", &sum]).arg("--dir").arg(dir)).map(drop)
+        },
+        || {
+            for name in [asset, sum.as_str()] {
+                tool(
+                    Command::new("curl")
+                        .args(["-fsSL", "--proto", "=https", "-o"])
+                        .arg(dir.join(name))
+                        .arg(format!("https://github.com/{REPO}/releases/download/{tag}/{name}")),
+                )?;
+            }
+            Ok(())
+        },
+    )
 }
 
-/// The file's SHA-256 against the release's `<asset>.sha256` (`<hex>  <name>`).
-fn verify(file: &Path, sum_file: &str) -> Result<(), String> {
+/// The bytes' SHA-256 against the release's `<asset>.sha256` (`<hex>  <name>`).
+fn verify(bytes: &[u8], sum_file: &str) -> Result<(), String> {
     let expected = sum_file.split_whitespace().next().unwrap_or_default().to_ascii_lowercase();
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("the release has no usable SHA-256 file".into());
     }
-    let bytes = std::fs::read(file).map_err(|e| format!("cannot read the download: {e}"))?;
-    let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let actual: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
     if actual != expected {
-        return Err(format!("checksum mismatch for {}: nothing was changed", file.display()));
+        return Err("the download does not match the release's SHA-256: nothing was changed".into());
     }
     Ok(())
 }
 
+/// Writes the new binary next to `exe` (a new file only this user can change, on the disk it is
+/// installed on), starts it there once (`--version` must name the release), then renames it over
+/// `exe` in one step. Windows cannot replace a running program but can rename it, so the old one
+/// moves aside to `<exe>.old` (removed by the next update).
+fn install(bytes: &[u8], exe: &Path, tag: &str) -> Result<(), String> {
+    let dir = exe.parent().ok_or("no folder for this program")?;
+    let name = exe.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let staged = dir.join(format!(".{name}.update-{}", random_hex()?));
+    write_new(&staged, bytes).map_err(|e| {
+        let rights = if e.kind() == std::io::ErrorKind::PermissionDenied {
+            ": install again with scripts/install.sh, or run this with the rights to change that folder"
+        } else {
+            ""
+        };
+        format!("cannot write to {} ({e}){rights}", dir.display())
+    })?;
+    let done = check_starts(&staged, tag).and_then(|()| set_executable(&staged)).and_then(|()| swap(&staged, exe));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    done
+}
+
+/// A new file (never an existing one) with `bytes`, 0700 on Unix; removed again if writing fails.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o700);
+    }
+    let mut f = o.open(path)?;
+    let written = f.write_all(bytes).and_then(|()| f.sync_all());
+    drop(f);
+    if written.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    written
+}
+
 /// The new binary must start and be the version asked for before it replaces this one.
 fn check_starts(file: &Path, tag: &str) -> Result<(), String> {
-    set_executable(file)?;
-    let out = Command::new(file).arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output();
-    let said = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    match said {
-        Some(s) if s == format!("gh-prv-local {}", &tag[1..]) => Ok(()),
-        Some(s) => Err(format!("the downloaded binary says {s:?}, not {tag}: nothing was changed")),
-        None => Err(format!(
-            "the downloaded {tag} binary does not start on this machine{}: nothing was changed",
-            if cfg!(target_os = "linux") { " (it needs the WebKitGTK runtime, libwebkit2gtk-4.1)" } else { "" }
-        )),
+    let out = Command::new(file)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot start the downloaded {tag} binary ({e}): nothing was changed"))?;
+    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if out.status.success() {
+        return if said == format!("gh-prv-local {}", &tag[1..]) {
+            Ok(())
+        } else {
+            Err(format!("the downloaded binary says {said:?}, not {tag}: nothing was changed"))
+        };
     }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim();
+    let webkit = if err.contains("libwebkit2gtk") { " (it needs the WebKitGTK runtime, libwebkit2gtk-4.1)" } else { "" };
+    Err(format!("the downloaded {tag} binary does not start ({}{}{first}){webkit}: nothing was changed", out.status, if first.is_empty() { "" } else { ": " }))
 }
 
 fn set_executable(file: &Path) -> Result<(), String> {
@@ -166,22 +246,6 @@ fn set_executable(file: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Puts `new` in place of `exe` in one step: a copy next to it first (the download may be on
-/// another disk), then a rename. Windows cannot replace a running program but can rename it, so
-/// the old one moves aside to `<exe>.old` (removed by the next update).
-fn replace(new: &Path, exe: &Path) -> Result<(), String> {
-    let dir = exe.parent().ok_or("no folder for this program")?;
-    let name = exe.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let staged = dir.join(format!(".{name}.update-{}", std::process::id()));
-    let denied = |e: std::io::Error| format!("cannot write to {} ({e}): install again with scripts/install.sh, or run this with the rights to change that folder", dir.display());
-    std::fs::copy(new, &staged).map_err(denied)?;
-    let done = set_executable(&staged).and_then(|()| swap(&staged, exe));
-    if done.is_err() {
-        let _ = std::fs::remove_file(&staged);
-    }
-    done
-}
-
 #[cfg(not(windows))]
 fn swap(staged: &Path, exe: &Path) -> Result<(), String> {
     std::fs::rename(staged, exe).map_err(|e| format!("cannot replace {}: {e}", exe.display()))
@@ -190,7 +254,9 @@ fn swap(staged: &Path, exe: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn swap(staged: &Path, exe: &Path) -> Result<(), String> {
     let old = PathBuf::from(format!("{}.old", exe.display()));
-    let _ = std::fs::remove_file(&old);
+    if old.exists() {
+        std::fs::remove_file(&old).map_err(|e| format!("cannot remove {} from the last update ({e}): is an older gh-prv-local still running?", old.display()))?;
+    }
     std::fs::rename(exe, &old).map_err(|e| format!("cannot move {} aside: {e}", exe.display()))?;
     std::fs::rename(staged, exe).map_err(|e| {
         let _ = std::fs::rename(&old, exe);
@@ -198,18 +264,39 @@ fn swap(staged: &Path, exe: &Path) -> Result<(), String> {
     })
 }
 
+/// `claude` (on Windows through cmd, which also finds an npm install's claude.cmd).
+fn claude(args: &[&str]) -> Command {
+    let mut c = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "claude"]);
+        c
+    } else {
+        Command::new("claude")
+    };
+    c.args(args).stdin(Stdio::null());
+    c
+}
+
 /// The Claude Code plugin (`/gh-prv-local`) comes from this repository's marketplace: when it is
 /// installed, it is updated too (Claude Code applies it after a restart).
 fn update_plugin() {
-    let listed = Command::new("claude").args(["plugin", "list", "--json"]).stdin(Stdio::null()).stderr(Stdio::null()).output();
+    let listed = claude(&["plugin", "list", "--json"]).stderr(Stdio::null()).output();
     let Some(scope) = listed.ok().and_then(|o| installed_scope(&String::from_utf8_lossy(&o.stdout))) else {
         return;
     };
-    let ok = |args: &[&str]| Command::new("claude").args(args).stdin(Stdio::null()).status().is_ok_and(|s| s.success());
+    let by_hand = format!("  claude plugin marketplace update {MARKETPLACE}\n  claude plugin update {PLUGIN} --scope {scope}");
+    // Run with sudo (to replace a binary in a system folder), it would leave root-owned files in
+    // your ~/.claude.
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        println!("Update the Claude Code plugin as yourself (not as root) with:\n{by_hand}");
+        return;
+    }
+    let ok = |args: &[&str]| claude(args).status().is_ok_and(|s| s.success());
     if ok(&["plugin", "marketplace", "update", MARKETPLACE]) && ok(&["plugin", "update", PLUGIN, "--scope", &scope]) {
         println!("Restart Claude Code to use the updated /gh-prv-local plugin.");
     } else {
-        println!("Update the Claude Code plugin with:\n  claude plugin marketplace update {MARKETPLACE}\n  claude plugin update {PLUGIN} --scope {scope}");
+        println!("Update the Claude Code plugin with:\n{by_hand}");
     }
 }
 
@@ -220,14 +307,26 @@ fn installed_scope(list: &str) -> Option<String> {
     Some(p["scope"].as_str().unwrap_or("user").to_string())
 }
 
-/// A new, empty folder in the system temp directory, removed with everything in it when dropped.
+fn random_hex() -> Result<String, String> {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).map_err(|e| format!("no random source: {e}"))?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+
+/// A new folder in the system temp directory, under a random name and private to this user (0700
+/// on Unix), removed with everything in it when dropped.
 struct TempDir(PathBuf);
 
 impl TempDir {
     fn new() -> Result<Self, String> {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let p = std::env::temp_dir().join(format!("gh-prv-local-update-{}-{nanos}", std::process::id()));
-        std::fs::create_dir(&p).map_err(|e| format!("cannot create {}: {e}", p.display()))?;
+        let p = std::env::temp_dir().join(format!("gh-prv-local-update-{}", random_hex()?));
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            b.mode(0o700);
+        }
+        b.create(&p).map_err(|e| format!("cannot create {}: {e}", p.display()))?;
         Ok(Self(p))
     }
 }
@@ -263,37 +362,82 @@ mod tests {
     }
 
     #[test]
-    fn checksums() {
-        let dir = TempDir::new().unwrap();
-        let f = dir.0.join("bin");
-        std::fs::write(&f, b"abc").unwrap();
-        // SHA-256("abc"), FIPS 180-2.
-        let sum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-        verify(&f, &format!("{sum}  bin\n")).unwrap();
-        verify(&f, &sum.to_uppercase()).unwrap();
-        assert!(verify(&f, &format!("{}0  bin", &sum[1..])).is_err());
-        assert!(verify(&f, "").is_err());
-        assert!(verify(&f, "not-a-sum bin").is_err());
+    fn version_order() {
+        assert!(newer("v0.2.10", "v0.2.9"));
+        assert!(newer("v1.0.0", "v0.99.99"));
+        assert!(newer("v1.0.0", "v1.0.0-rc.1"));
+        assert!(newer("v1.0.0-rc.1", "v0.9.0"));
+        assert!(!newer("v0.2.1", "v0.2.1"));
+        assert!(!newer("v0.2.1", "v0.2.2"));
+        assert!(!newer("v1.0.0-rc.1", "v1.0.0"));
     }
 
     #[test]
-    fn replaces_the_file_in_place() {
-        let dir = TempDir::new().unwrap();
-        let exe = dir.0.join("gh-prv-local");
-        let new = dir.0.join("download");
-        std::fs::write(&exe, b"old").unwrap();
-        std::fs::write(&new, b"new").unwrap();
-        replace(&new, &exe).unwrap();
-        assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+    fn checksums() {
+        // SHA-256("abc"), FIPS 180-2.
+        let sum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        verify(b"abc", &format!("{sum}  bin\n")).unwrap();
+        verify(b"abc", &sum.to_uppercase()).unwrap();
+        assert!(verify(b"abd", sum).is_err());
+        assert!(verify(b"abc", &format!("{}0  bin", &sum[1..])).is_err());
+        assert!(verify(b"abc", "").is_err());
+        assert!(verify(b"abc", "not-a-sum bin").is_err());
+    }
+
+    #[test]
+    fn private_temp_dir() {
+        let a = TempDir::new().unwrap();
+        let b = TempDir::new().unwrap();
+        assert_ne!(a.0, b.0);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777, 0o755);
+            assert_eq!(std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777, 0o700);
         }
-        // Nothing staged is left behind.
-        let mut left: Vec<_> = std::fs::read_dir(&dir.0).unwrap().map(|e| e.unwrap().file_name()).collect();
-        left.sort();
-        assert_eq!(left, ["download", "gh-prv-local"]);
+        let p = a.0.clone();
+        drop(a);
+        assert!(!p.exists());
+    }
+
+    /// A stand-in release binary: a script answering `--version` like gh-prv-local.
+    #[cfg(unix)]
+    fn fake_binary(says: &str) -> Vec<u8> {
+        format!("#!/bin/sh\necho '{says}'\n").into_bytes()
+    }
+
+    #[cfg(unix)]
+    fn files(dir: &Path) -> Vec<String> {
+        let mut v: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installs_in_place_once_it_starts_as_the_release() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let exe = dir.0.join("gh-prv-local");
+        std::fs::write(&exe, b"old").unwrap();
+        let new = fake_binary("gh-prv-local 9.9.9");
+        install(&new, &exe, "v9.9.9").unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), new);
+        assert_eq!(std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(files(&dir.0), ["gh-prv-local"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_the_old_binary_when_the_new_one_is_not_the_release() {
+        let dir = TempDir::new().unwrap();
+        let exe = dir.0.join("gh-prv-local");
+        std::fs::write(&exe, b"old").unwrap();
+        let e = install(&fake_binary("gh-prv-local 1.0.0"), &exe, "v9.9.9").unwrap_err();
+        assert!(e.contains("says") && e.contains("nothing was changed"), "{e}");
+        let e = install(b"#!/bin/sh\necho broken >&2\nexit 3\n", &exe, "v9.9.9").unwrap_err();
+        assert!(e.contains("does not start") && e.contains("broken"), "{e}");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+        assert_eq!(files(&dir.0), ["gh-prv-local"]);
     }
 
     #[test]

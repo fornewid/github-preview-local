@@ -201,6 +201,8 @@ function stateOf(s: Store): PersistedState {
 
 /** Loads asked for (commit ranges): only the newest one's answer is used. */
 let reloads = 0
+/** Tab changes so far: a commit opened from a tab moves to Files changed only if none came since. */
+let tabMoves = 0
 /** Saves go one after another, so an older one never lands after a newer one. */
 let saving: Promise<unknown> = Promise.resolve()
 /** Saves immediately (comments, viewed) or debounced (typing in title/description). */
@@ -331,16 +333,17 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   setTab: (tab) => {
+    tabMoves++
     // A dialog panel belongs to the Files page it was opened on.
     set((s) => (tab !== 'files' && s.panelDialog ? { tab, panel: null, panelDialog: false } : { tab }))
     window.scrollTo({ top: 0 })
   },
   openCommit: (sha) => {
-    const from = get().tab
+    const moves = tabMoves
     void get()
       .reload({ from: sha, to: sha })
       // Going to another tab meanwhile cancels the move (the range still changes).
-      .then((shown) => shown && get().tab === from && get().setTab('files'))
+      .then((shown) => shown && tabMoves === moves && get().setTab('files'))
   },
 
   applySettings(s) {

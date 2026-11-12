@@ -188,6 +188,8 @@ function ProgressBar() {
       const hide = setTimeout(() => setValue(null), 450)
       return () => clearTimeout(hide)
     }
+    // Another load while the last one's bar still fades out: start over from a new bar.
+    setValue((v) => (v !== null && v >= 1 ? null : v))
     let trickle: ReturnType<typeof setInterval> | undefined
     const show = setTimeout(() => {
       setValue(0.1)
@@ -198,8 +200,15 @@ function ProgressBar() {
       clearInterval(trickle)
     }
   }, [active])
-  if (value === null) return null
-  return <div className={`ProgressBar ${value >= 1 ? 'is-done' : ''}`} style={{ transform: `scaleX(${value})` }} aria-hidden />
+  return (
+    <>
+      {/* For screen readers, which the bar says nothing to (a live region kept in place). */}
+      <span className="sr-only" role="status">
+        {active ? 'Loading changes…' : ''}
+      </span>
+      {value !== null && <div className={`ProgressBar ${value >= 1 ? 'is-done' : ''}`} style={{ transform: `scaleX(${value})` }} aria-hidden />}
+    </>
+  )
 }
 
 /** Native window: Cmd/Ctrl + `=` / `-` / `0` zoom like a browser, and the level is kept. */
