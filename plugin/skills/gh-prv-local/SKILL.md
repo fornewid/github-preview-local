@@ -1,30 +1,32 @@
 ---
 name: gh-prv-local
-description: Open a GitHub-style "Files changed" preview of the current branch (merge-base...HEAD, exactly like a pull request) in a native window, let the user review it with line comments, and get the review back as text. Use when the user wants to review changes before pushing or opening a PR, asks to "preview the PR", "review my branch", or wants to avoid slow remote CI/review round-trips. "Confirm" in the window pushes the branch and opens the PR.
+description: Open a GitHub-style "Files changed" preview of the current branch (merge-base...HEAD, exactly like a pull request) in a browser tab (or a native window), let the user review it with line comments, and get the review back as text. Use when the user wants to review changes before pushing or opening a PR, asks to "preview the PR", "review my branch", or wants to avoid slow remote CI/review round-trips. "Confirm" in the page pushes the branch and opens the PR.
 ---
 
 # gh-prv-local — local pull request preview
 
 `gh-prv-local` shows the current branch compared with its base branch the way GitHub's pull request
 "Files changed" tab does (three-dot diff from the merge base, split/unified view, hide whitespace,
-file tree, viewed files, expandable context). The user reviews it in a native window; nothing is
-served over HTTP, and gh-prv-local talks to the repository's `origin` only: it fetches the base branch, looks
-up an open pull request on origin's GitHub host, and pushes only when the user presses **Confirm**.
+file tree, viewed files, expandable context). The user reviews it in a browser tab, served on
+127.0.0.1 for this run only (or in a native window with `--window`), and gh-prv-local talks to the
+repository's `origin` only: it fetches the base branch, looks up an open pull request on origin's
+GitHub host, and pushes only when the user presses **Confirm**.
 
 If the command is not found, the CLI is not installed: point the user to the install steps,
 https://github.com/fornewid/github-preview-local#install
 
 ## Run it
 
-The window stays open until the user submits a review, which can take longer than a foreground
-command timeout. Run it **in the background** and wait for it to finish:
+It runs until the user submits a review (or closes the tab or window), which can take longer than
+a foreground command timeout. Run it **in the background** and wait for it to finish:
 
 ```bash
 gh-prv-local                 # compare HEAD with the remote default branch (fetches the base first)
 gh-prv-local --base develop  # compare with another base branch
 gh-prv-local --uncommitted   # include uncommitted and untracked changes (great right after editing)
 gh-prv-local --no-fetch      # skip `git fetch` of the base branch
-gh-prv-local --browser       # review in a browser tab instead of the native window (if the user prefers)
+gh-prv-local --window        # a native window instead of a browser tab (if the user prefers)
+gh-prv-local --browser=chrome  # a given browser instead of the default one
 gh-prv-local --format json   # machine-readable result
 ```
 

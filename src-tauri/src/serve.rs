@@ -6,7 +6,7 @@
 //! review is submitted, when the tab has been gone for a while, or on Ctrl-C.
 
 use crate::model::PublishRequest;
-use crate::{export, fail, proc, AppState};
+use crate::{create_private, export, fail, proc, unique_name, AppState};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -23,6 +23,8 @@ const MAX_BODY: usize = 32 * 1024 * 1024;
 /// well within it).
 const GONE_AFTER: Duration = Duration::from_secs(15);
 const HEARTBEAT: Duration = Duration::from_secs(5);
+/// Connections handled at once (a page needs a few); more are turned away.
+const MAX_CONNECTIONS: usize = 64;
 
 struct Server {
     state: Arc<AppState>,
@@ -31,6 +33,7 @@ struct Server {
     /// Open event streams (one per page).
     streams: Mutex<Vec<mpsc::Sender<String>>>,
     pages: AtomicUsize,
+    connections: AtomicUsize,
     seen_page: AtomicBool,
     last_page: Mutex<Instant>,
     submitted: AtomicBool,
@@ -52,6 +55,7 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         port,
         streams: Mutex::new(vec![]),
         pages: AtomicUsize::new(0),
+        connections: AtomicUsize::new(0),
         seen_page: AtomicBool::new(false),
         last_page: Mutex::new(Instant::now()),
         submitted: AtomicBool::new(false),
@@ -59,7 +63,9 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
     });
     let url = format!("http://127.0.0.1:{port}/?token={}", srv.token);
     eprintln!("gh-prv-local: reviewing in the browser at {url}");
-    open_browser(&url, browser);
+    let opener = open_browser(&url, browser);
+    let started = Instant::now();
+    let mut reminded = false;
     {
         let srv = srv.clone();
         proc::on_terminate(move || srv.interrupted.store(true, Ordering::SeqCst));
@@ -69,23 +75,38 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         if srv.submitted.load(Ordering::SeqCst) || srv.interrupted.load(Ordering::SeqCst) {
             break;
         }
-        let gone = srv.seen_page.load(Ordering::SeqCst)
+        let seen = srv.seen_page.load(Ordering::SeqCst);
+        let gone = seen
             && srv.pages.load(Ordering::SeqCst) == 0
             && srv.last_page.lock().map(|t| t.elapsed() > GONE_AFTER).unwrap_or(false);
         if gone {
             break;
         }
+        if !seen && !reminded && started.elapsed() > Duration::from_secs(60) {
+            reminded = true;
+            eprintln!("gh-prv-local: no page has opened yet; open {url}");
+        }
         match listener.accept() {
             Ok((stream, _)) => {
+                if srv.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    srv.connections.fetch_sub(1, Ordering::SeqCst);
+                    continue; // dropped
+                }
                 // Accepted sockets inherit the listener's non-blocking mode on macOS and BSDs.
                 let _ = stream.set_nonblocking(false);
                 let srv = srv.clone();
-                std::thread::spawn(move || Server::handle(&srv, stream));
+                std::thread::spawn(move || {
+                    Server::handle(&srv, stream);
+                    srv.connections.fetch_sub(1, Ordering::SeqCst);
+                });
             }
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
     srv.state.finish();
+    if let Some(file) = opener {
+        let _ = std::fs::remove_file(file);
+    }
     std::process::exit(if srv.interrupted.load(Ordering::SeqCst) { 130 } else { 0 })
 }
 
@@ -101,11 +122,23 @@ fn token() -> String {
         .collect()
 }
 
-fn open_browser(url: &str, browser: &str) {
+/// Opens the page; returns the redirect file to remove at the end. The browser gets a private file
+/// that leads to the address, not the address itself: a command line (with the token) is visible
+/// to other users of the machine, a 0600 file is not (Jupyter does the same).
+fn open_browser(url: &str, browser: &str) -> Option<std::path::PathBuf> {
     // `--browser=none`: only the address (open it yourself, e.g. through an SSH tunnel).
     if browser == "none" {
-        return;
+        return None;
     }
+    let file = std::env::temp_dir().join(format!("{}.html", unique_name("gh-prv-local-open")));
+    let page = format!(
+        "<!doctype html><meta charset=utf-8><meta name=referrer content=no-referrer>\
+         <meta http-equiv=refresh content=\"0;url={url}\"><title>gh-prv-local</title><a href=\"{url}\">Open the review</a>"
+    );
+    let target = match create_private(&file).and_then(|mut f| f.write_all(page.as_bytes())) {
+        Ok(()) => file.to_string_lossy().into_owned(),
+        Err(_) => url.to_string(),
+    };
     let mac_app = |b: &str| match b.to_ascii_lowercase().as_str() {
         "chrome" | "google-chrome" => "Google Chrome".to_string(),
         "edge" => "Microsoft Edge".to_string(),
@@ -121,7 +154,8 @@ fn open_browser(url: &str, browser: &str) {
         c
     } else if cfg!(windows) {
         let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "\"\""]);
+        // `start ""`: the empty title (Rust quotes an empty argument as "").
+        c.args(["/C", "start", ""]);
         if !browser.is_empty() {
             c.arg(if browser == "edge" { "msedge" } else { browser });
         }
@@ -131,9 +165,19 @@ fn open_browser(url: &str, browser: &str) {
     } else {
         std::process::Command::new(if browser == "chrome" { "google-chrome" } else { browser })
     };
-    if cmd.arg(url).spawn().is_err() {
-        eprintln!("gh-prv-local: could not open a browser; open the address above yourself");
+    // Not on our stdout: the review printed there is what the caller reads.
+    use std::process::Stdio;
+    match cmd.arg(&target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                if child.wait().is_ok_and(|s| !s.success()) {
+                    eprintln!("gh-prv-local: could not open the browser; open the address above yourself");
+                }
+            });
+        }
+        Err(_) => eprintln!("gh-prv-local: could not open a browser; open the address above yourself"),
     }
+    Some(file)
 }
 
 struct Request {
@@ -149,7 +193,8 @@ impl Request {
     }
 }
 
-fn read_request(stream: &TcpStream) -> Option<Request> {
+/// The request line and headers; the body is read after the request has been let in.
+fn read_request(stream: &TcpStream) -> Option<(Request, Vec<u8>)> {
     let mut r = BufReader::new(stream.try_clone().ok()?.take(MAX_HEADERS));
     let mut line = String::new();
     r.read_line(&mut line).ok()?;
@@ -168,20 +213,27 @@ fn read_request(stream: &TcpStream) -> Option<Request> {
         let (k, v) = h.split_once(':')?;
         headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
     }
-    let len: usize = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
+    let path = target.split('?').next().unwrap_or("/").to_string();
+    // Body bytes already read along with the headers.
+    let buffered = r.buffer().to_vec();
+    Some((Request { method, path, headers, body: vec![] }, buffered))
+}
+
+/// The body (`Content-Length` bytes), after what came with the headers.
+fn read_body(stream: &TcpStream, req: &mut Request, buffered: Vec<u8>) -> Option<()> {
+    let len: usize = req.header("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
     if len > MAX_BODY {
         return None;
     }
-    // The rest of the stream (the header limit no longer applies).
-    let buffered = r.buffer().to_vec();
-    let mut body = buffered[..buffered.len().min(len)].to_vec();
+    let mut body = buffered;
+    body.truncate(len);
     if body.len() < len {
         let mut rest = vec![0; len - body.len()];
         (&*stream).read_exact(&mut rest).ok()?;
         body.extend(rest);
     }
-    let path = target.split('?').next().unwrap_or("/").to_string();
-    Some(Request { method, path, headers, body })
+    req.body = body;
+    Some(())
 }
 
 fn respond(mut stream: &TcpStream, status: &str, kind: &str, body: &[u8], extra: &[(&str, &str)]) {
@@ -214,8 +266,8 @@ fn csp() -> String {
 
 impl Server {
     fn handle(self: &Arc<Self>, stream: TcpStream) {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-        let Some(req) = read_request(&stream) else { return };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let Some((mut req, buffered)) = read_request(&stream) else { return };
         let here = [format!("127.0.0.1:{}", self.port), format!("localhost:{}", self.port)];
         let host_ok = req.header("host").is_some_and(|h| here.iter().any(|x| x == h));
         let origin_ok = req.header("origin").is_none_or(|o| here.iter().any(|x| o == format!("http://{x}")));
@@ -224,7 +276,8 @@ impl Server {
         if !host_ok || !origin_ok || !site_ok {
             return respond(&stream, "403 Forbidden", "text/plain", b"forbidden", &[]);
         }
-        match (req.method.as_str(), req.path.as_str()) {
+        let (method, path) = (req.method.clone(), req.path.clone());
+        match (method.as_str(), path.as_str()) {
             ("GET", "/") => {
                 let page = export::page_with("<script>window.__PRV_SERVER__=true;</script>");
                 respond(&stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), &[("Content-Security-Policy", &csp())])
@@ -233,7 +286,10 @@ impl Server {
                 if !req.header("x-prv-token").is_some_and(|t| same(t, &self.token)) {
                     return respond(&stream, "401 Unauthorized", "text/plain", b"no or wrong token", &[]);
                 }
-                match (req.method.as_str(), &path[5..]) {
+                if read_body(&stream, &mut req, buffered).is_none() {
+                    return respond(&stream, "413 Content Too Large", "text/plain", b"too large", &[]);
+                }
+                match (method.as_str(), &path[5..]) {
                     ("GET", "events") => self.events(&stream),
                     ("POST", name) => {
                         let args: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
@@ -272,6 +328,7 @@ impl Server {
                 to_json(st.run_check(&need("name")?, move |e| srv.broadcast(e.to_string())))
             }
             "cancel_check" => to_json(st.cancel_check(&need("name")?)),
+            "check_runs" => to_json(Ok(st.check_runs())),
             "find_pr" => to_json(st.find_pr()),
             "publish" => {
                 let req: PublishRequest = serde_json::from_value(args["req"].clone()).map_err(|e| e.to_string())?;

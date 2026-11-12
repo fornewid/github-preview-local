@@ -9,8 +9,11 @@ import type { FileDiff } from '../../types'
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform)
 /** Cmd on a Mac (where Ctrl+F / Ctrl+G move the caret in text fields), Ctrl elsewhere. */
 const mod = (e: KeyboardEvent) => (MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey
-/** The letter, also on keyboards that type something else for it. */
-const letter = (e: KeyboardEvent, l: string) => e.key.toLowerCase() === l || e.code === `Key${l.toUpperCase()}`
+/** The letter; its key position only when the layout types no Latin letter there (Cyrillic, …). */
+const letter = (e: KeyboardEvent, l: string) => {
+  const key = e.key.toLowerCase()
+  return key === l || (!/^[a-z]$/.test(key) && e.code === `Key${l.toUpperCase()}`)
+}
 const same = (a: FindMatch, b: FindMatch) => a.path === b.path && a.cell === b.cell && a.nth === b.nth
 
 /**
@@ -57,6 +60,8 @@ export function FindBar({ files }: { files: FileDiff[] }) {
   // typing pauses (each match it passes may open a file). Other changes, such as a file marked
   // viewed, keep the current match.
   const searched = useRef('')
+  // The pending first jump of a new search; a step (Enter, Cmd+G) cancels it.
+  const jump = useRef(0)
   useEffect(() => {
     if (!open) return
     const key = `${query}\n${split}\n${whitespace}`
@@ -65,27 +70,38 @@ export function FindBar({ files }: { files: FileDiff[] }) {
       if (keep >= 0) setIndex(keep)
       return
     }
-    searched.current = key
-    if (!matches.length) return setIndex(0)
-    const timer = setTimeout(() => {
+    if (!matches.length) {
+      searched.current = key
+      return setIndex(0)
+    }
+    jump.current = window.setTimeout(() => {
+      jump.current = 0
+      // Done only once it happened, so a search interrupted by other changes is started again.
+      searched.current = key
       const order = new Map(files.map((f, i) => [f.path, i]))
       const top = files.findIndex((f) => (document.getElementById(anchorFor(f.path))?.getBoundingClientRect().bottom ?? 0) > 80)
       const first = Math.max(0, matches.findIndex((m) => (order.get(m.path) ?? 0) >= top))
       setIndex(first)
       go(matches[first])
     }, 250)
-    return () => clearTimeout(timer)
+    return () => clearTimeout(jump.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, matches])
 
   const step = useCallback(
     (by: number) => {
       if (!matches.length) return
+      if (jump.current) {
+        // Typed and stepped at once: the search counts as done, from here.
+        clearTimeout(jump.current)
+        jump.current = 0
+        searched.current = `${query}\n${split}\n${whitespace}`
+      }
       const next = (at + by + matches.length) % matches.length
       setIndex(next)
       go(matches[next])
     },
-    [matches, at, go],
+    [matches, at, go, query, split, whitespace],
   )
   const close = useCallback(() => {
     clearTimeout(waiting.current)

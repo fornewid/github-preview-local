@@ -1,5 +1,6 @@
-// Transport abstraction: the same UI runs inside the native window (Tauri IPC,
-// no HTTP server) or as a static HTML export (data embedded in the page).
+// Transport abstraction: the same UI runs in a browser tab served by gh-prv-local (HTTP on
+// 127.0.0.1), inside the native window (Tauri IPC, no HTTP server) or as a static HTML export
+// (data embedded in the page).
 
 import type {
   CheckDef,
@@ -26,6 +27,12 @@ export interface SnapshotQuery {
   to?: string | null
 }
 
+export interface CheckRun {
+  status: CheckStatus
+  exitCode: number | null
+  output: string
+}
+
 /** Progress of a local check, from the native side: a status change, a chunk of output or both. */
 export interface CheckEvent {
   name: string
@@ -47,6 +54,8 @@ export interface Transport {
   loadState(snapshot: Snapshot): Promise<PersistedState>
   saveState(snapshot: Snapshot, state: PersistedState): Promise<void>
   listChecks(): Promise<CheckDef[]>
+  /** Each check's last run (status, exit code, output), for a page that was not there to see it. */
+  checkRuns(): Promise<Array<[string, CheckRun]>>
   runCheck(name: string): Promise<void>
   cancelCheck(name: string): Promise<void>
   findPr(): Promise<ExistingPr | null>
@@ -96,6 +105,7 @@ function createNative(): Transport {
     loadState: async () => (await invoke<PersistedState | null>('load_state')) ?? emptyState(),
     saveState: (_s, state) => invoke<void>('save_state', { state }),
     listChecks: () => invoke<CheckDef[]>('list_checks'),
+    checkRuns: () => invoke<Array<[string, CheckRun]>>('check_runs'),
     runCheck: (name) => invoke<void>('run_check', { name }),
     cancelCheck: (name) => invoke<void>('cancel_check', { name }),
     findPr: async () => (await invoke<ExistingPr | null>('find_pr')) ?? null,
@@ -150,11 +160,23 @@ function createHttp(): Transport {
   let done = false
   void (async () => {
     let failures = 0
+    let reconnect = false
     while (!done) {
       try {
         const r = await fetch('/api/events', { headers: { 'X-Prv-Token': token } })
         if (!r.ok || !r.body) throw new Error(`${r.status}`)
         failures = 0
+        // Back after a hiccup: catch up on what the checks did meanwhile (a fresh page does that
+        // when it lists the checks).
+        if (reconnect) {
+          const emit = (e: CheckEvent) => listeners.forEach((l) => l(e))
+          for (const [name, run] of await call<Array<[string, CheckRun]>>('check_runs')) {
+            emit({ name, status: 'running' })
+            if (run.output) emit({ name, chunk: run.output })
+            if (run.status !== 'running') emit({ name, status: run.status, exitCode: run.exitCode })
+          }
+        }
+        reconnect = true
         const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
         let buf = ''
         for (;;) {
@@ -183,6 +205,7 @@ function createHttp(): Transport {
     loadState: async () => (await call<PersistedState | null>('load_state')) ?? emptyState(),
     saveState: (_s, state) => call<void>('save_state', { state }),
     listChecks: () => call<CheckDef[]>('list_checks'),
+    checkRuns: () => call<Array<[string, CheckRun]>>('check_runs'),
     runCheck: (name) => call<void>('run_check', { name }),
     cancelCheck: (name) => call<void>('cancel_check', { name }),
     findPr: async () => (await call<ExistingPr | null>('find_pr')) ?? null,
@@ -192,8 +215,9 @@ function createHttp(): Transport {
     },
     publish: (req) => call<PublishResult>('publish', { req }),
     submit: async (result, markdown) => {
-      done = true
       await call<void>('submit_review', { result, markdown })
+      // gh-prv-local ends now: its stream closing is expected.
+      done = true
     },
     openInEditor: (path) => call<void>('open_in_editor', { path }),
     setZoom: async () => {},
@@ -225,6 +249,7 @@ function createStatic(data: StaticData): Transport {
       }
     },
     listChecks: async () => [],
+    checkRuns: async () => [],
     runCheck: async () => {},
     cancelCheck: async () => {},
     findPr: async () => null,

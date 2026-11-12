@@ -17,17 +17,17 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   title and the tabs stay in place on every tab.
 - **Any window size and zoom**: from a phone-sized 320px window to 4K, the page changes layout at
   the same widths github.com does (file tree and side panels become dialogs, labels shorten,
-  toolbar controls move into an overflow menu, …). The native window zooms with Cmd/Ctrl + `=` /
+  toolbar controls move into an overflow menu, …). The native window (`--window`) zooms with Cmd/Ctrl + `=` /
   `-` / `0` like a browser.
 - **Kept in sync with github.com**: measuring tools capture the signed-in page and compare it with
   gh-prv-local pixel by pixel ([docs/design-sync.md](docs/design-sync.md)).
 - **Same comparison as a pull request**: three-dot diff from the merge base of `origin/<base>`
   (fetched first), rename detection, `.gitattributes` `linguist-generated`, lock files
   collapsed, binary / submodule / mode changes, CRLF, *No newline at end of file*.
-- **No web server by default**: a native window (system WebView via Tauri) talks to the CLI over
-  IPC; nothing listens on a port. With `--browser` the page opens in a browser tab instead (like
-  plannotator), served on 127.0.0.1 for that run only: every request needs the run's token and
-  must come from that page, and closing the tab ends the run like closing the window.
+- **A browser tab, or a native window**: the page opens in a browser tab (like plannotator),
+  served on 127.0.0.1 for that run only: every request needs the run's token and must come from
+  that page, and closing the tab ends the run. With `--window` it opens in a native window
+  instead (system WebView via Tauri), which talks to the CLI over IPC: nothing listens on a port.
 - **Talks to `origin` only**: gh-prv-local fetches the base branch from `origin` (skip with `--no-fetch`),
   looks up an open pull request on origin's GitHub host when you choose *Confirm*, and pushes and
   opens the pull request when you press *Confirm*. Nothing else leaves the machine: no other
@@ -89,18 +89,18 @@ From source (Rust and Node.js 20+): `./scripts/install.sh --source` in a clone.
 /plugin install gh-prv-local@github-preview-local
 ```
 
-Then run `/gh-prv-local` (or just ask Claude to "preview the PR"). The window opens; when you submit,
+Then run `/gh-prv-local` (or just ask Claude to "preview the PR"). A browser tab opens; when you submit,
 Claude receives your review and addresses each comment. *Confirm* pushes and opens the PR.
 
 ## Usage
 
 ```bash
-gh-prv-local                         # HEAD vs the remote default branch (fetches the base first)
+gh-prv-local                         # HEAD vs the remote default branch (fetches the base first), in a browser tab
 gh-prv-local --base develop          # another base branch (origin/develop if it exists)
 gh-prv-local --uncommitted           # include uncommitted + untracked changes (staging area untouched)
 gh-prv-local --no-fetch              # do not fetch the base branch
-gh-prv-local --browser               # review in a browser tab instead of the window (default browser)
-gh-prv-local --browser=chrome        # in a given browser; --browser=none only prints the address
+gh-prv-local --browser=chrome        # in a given browser (or GH_PRV_LOCAL_BROWSER=chrome); none: only print the address
+gh-prv-local --window                # in a native window instead (no server)
 gh-prv-local --format json           # JSON review on stdout
 gh-prv-local -C path/to/repo         # run in another repository
 
@@ -120,7 +120,8 @@ level is remembered); in a browser (`gh-prv-local export`) use the browser's zoo
   on several lines; the comment button in a file header comments on the whole file. The comment box
   has GitHub's formatting toolbar, including *suggestions*.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
-  - *Comment / Request changes*: the window closes and the review is printed to stdout.
+  - *Comment / Request changes*: the review is printed to stdout and gh-prv-local ends (the window
+    closes; a tab says it is done).
   - *Confirm*: edit the PR title / description (prefilled from the commit or
     `.github/pull_request_template.md`), optionally *draft*, then `gh-prv-local` pushes the reviewed commit
     and runs `gh pr create` (or reuses the open PR). Also available from the **Conversation** tab,
@@ -174,15 +175,15 @@ Results appear in the **Checks** tab and on the **Conversation** tab.
 ## How it works
 
 ```
-gh-prv-local (Rust CLI)                                             native window (system WebView)
- ├─ git: merge-base, diff --raw/--numstat/-U3 (and -w), cat-file   ◄── Tauri IPC ──►  React UI
+gh-prv-local (Rust CLI)                                     browser tab (HTTP, 127.0.0.1) or native window (--window)
+ ├─ git: merge-base, diff --raw/--numstat/-U3 (and -w), cat-file   ◄── HTTP / Tauri IPC ──►  React UI
  ├─ merge-tree conflicts, CODEOWNERS of the base branch                      ├─ Primer React (github.com's release) + primitives
  ├─ checks runner (.gh-prv-local.toml / auto-detect)                         ├─ starry-night (GitHub grammars, pl-* classes)
  ├─ publish: git push + gh pr create                                         └─ GitHub's new Files changed layout (prv.css)
  └─ prints the review to stdout on exit
 ```
 
-With `--browser`, the CLI serves the same page and the same calls over HTTP on 127.0.0.1 (port
+For a browser tab, the CLI serves the page and the window's calls over HTTP on 127.0.0.1 (port
 19514, or a free one; `GH_PRV_LOCAL_PORT` picks it, e.g. to forward it over SSH with
 `--browser=none`). The address it opens carries a token made for that run; the page sends it with
 every call, and the server also checks the `Host`, `Origin` and `Sec-Fetch-Site` headers.
@@ -201,8 +202,8 @@ The UI is a single HTML file (highlighter worker and WASM inlined) embedded in t
 ```bash
 npm --prefix ui install && npm --prefix ui run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
-# Opens the window, reports what rendered (and that code draws in Chrome's font, not WebKit's
-# SF Mono), exits.
+# Opens the native window, reports what rendered (and that code draws in Chrome's font, not
+# WebKit's SF Mono), exits.
 GH_PRV_LOCAL_SELFTEST=1 src-tauri/target/release/gh-prv-local --no-fetch
 
 # The native-only features, clicked through in the real window: a commit range, local checks
@@ -212,6 +213,7 @@ scripts/native-selftest.sh --github you/scratch-repo  # real push and pull reque
 
 cd tools/reference && npm install
 node ui-test.mjs path/to/export.html                  # end-to-end checks of the review UI
+node browser-test.mjs path/to/gh-prv-local scratch-repo   # the browser tab mode, its guards, submit and close
 node docgifs.mjs path/to/export.html                  # the README animations (needs ffmpeg)
 ```
 

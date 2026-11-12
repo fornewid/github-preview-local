@@ -262,7 +262,14 @@ export const useStore = create<Store>((set, get) => ({
     // A broken .gh-prv-local.toml only affects the Checks tab.
     try {
       const defs = await t.listChecks()
-      set({ checks: defs.map((d) => ({ ...d, status: 'idle', output: '' })) })
+      // A reloaded browser tab: checks may have run, or still run, without it.
+      const runs = new Map(await t.checkRuns().catch(() => []))
+      set({
+        checks: defs.map((d) => {
+          const run = runs.get(d.name)
+          return run ? { ...d, status: run.status, exitCode: run.exitCode, output: run.output } : { ...d, status: 'idle', output: '' }
+        }),
+      })
     } catch (e) {
       set({ checksError: String(e) })
     }
@@ -495,20 +502,22 @@ export const useStore = create<Store>((set, get) => ({
     }
     const markdown = formatReview(result, snapshot)
     clearTimeout(saveTimer)
-    set({
-      busy: null,
-      submitted: { result, markdown },
-      drafts: [],
-      lastReview: { head: snapshot.head.sha, at: new Date().toISOString() },
-      reviewDraft: EMPTY_REVIEW,
-    })
+    const lastReview = { head: snapshot.head.sha, at: new Date().toISOString() }
     // Persist the cleared drafts *before* gh-prv-local exits (it clears them too).
     try {
-      await transport.saveState(snapshot, stateOf(get()))
+      await transport.saveState(snapshot, { ...stateOf(get()), drafts: [], lastReview })
     } catch {
       /* never lose the review because of a failed save */
     }
-    await transport.submit(result, markdown)
+    try {
+      await transport.submit(result, markdown)
+    } catch (e) {
+      // Not submitted after all: the comments stay pending.
+      set({ busy: null })
+      persist(get)
+      throw e
+    }
+    set({ busy: null, submitted: { result, markdown }, drafts: [], lastReview, reviewDraft: EMPTY_REVIEW })
   },
 }))
 

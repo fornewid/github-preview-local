@@ -31,7 +31,8 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder}
     name = "gh-prv-local",
     version,
     about = "Preview your branch as a GitHub pull request, locally.",
-    long_about = "Opens your branch in a GitHub-style \"Files changed\" view (merge-base...HEAD, like a pull request).\n\
+    long_about = "Opens your branch in a GitHub-style \"Files changed\" view (merge-base...HEAD, like a pull request)\n\
+                  in a browser tab (served on 127.0.0.1 for this run only), or in a native window with --window.\n\
                   Submitting a review prints it to stdout for AI agents; \"Confirm\" pushes and opens the pull request."
 )]
 struct Cli {
@@ -53,11 +54,13 @@ struct Cli {
     /// Output format of the review printed on exit
     #[arg(long, value_enum, default_value_t = Format::Markdown, global = true)]
     format: Format,
-    /// Review in a browser tab instead of the native window: the default browser, one by name
-    /// (--browser=chrome), or none (--browser=none: just print the address). Served on 127.0.0.1
-    /// for this run only.
+    /// The browser for the review tab (the default): one by name (--browser=chrome) or none
+    /// (--browser=none: just print the address). Default: $GH_PRV_LOCAL_BROWSER, else the system's.
     #[arg(long, value_name = "BROWSER", num_args = 0..=1, default_missing_value = "", require_equals = true)]
     browser: Option<String>,
+    /// Review in the native window instead of a browser tab (nothing is served)
+    #[arg(long, conflicts_with = "browser")]
+    window: bool,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -114,7 +117,23 @@ struct AppState {
     current: Mutex<Option<Arc<Current>>>,
     result: Mutex<Option<(serde_json::Value, String)>>,
     running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// Each check's last run as the page knows it (status, exit code, output), so a reloaded tab
+    /// catches up.
+    check_runs: Arc<Mutex<HashMap<String, CheckRun>>>,
+    /// One write of the state file at a time (a browser tab's saves arrive on several threads).
+    state_lock: Mutex<()>,
 }
+
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckRun {
+    status: String,
+    exit_code: Option<i32>,
+    output: String,
+}
+
+/// Output kept per check for a reloaded tab (the page keeps 200 000 characters).
+const CHECK_OUTPUT_KEPT: usize = 256 * 1024;
 
 /// What the page asks for, the same in the native window (Tauri IPC) and in a browser tab
 /// (`--browser`, serve.rs). Blocking: callers run them off the UI thread.
@@ -131,6 +150,8 @@ impl AppState {
             current: Mutex::new(None),
             result: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
+            check_runs: Arc::new(Mutex::new(HashMap::new())),
+            state_lock: Mutex::new(()),
         }
     }
 
@@ -177,7 +198,12 @@ impl AppState {
 
     fn save_state(&self, state: &serde_json::Value) -> Result<(), String> {
         let Some(cur) = self.current() else { return Ok(()) };
+        let _one = self.state_lock.lock().map_err(|e| e.to_string())?;
         write_state(&self.state_dir, &cur.snapshot.head.name, state)
+    }
+
+    fn check_runs(&self) -> Vec<(String, CheckRun)> {
+        self.check_runs.lock().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default()
     }
 
     fn list_checks(&self) -> Result<Vec<CheckDef>, String> {
@@ -199,8 +225,25 @@ impl AppState {
         let env = self.current().map(|c| check_env(&c.snapshot)).unwrap_or_default();
         let root = self.git.root.clone();
         let running = self.running.clone();
+        let runs = self.check_runs.clone();
         std::thread::spawn(move || {
             let event = |status: Option<&str>, chunk: Option<&str>, code: Option<i32>| {
+                if let Ok(mut runs) = runs.lock() {
+                    let run = runs.entry(def.name.clone()).or_default();
+                    if let Some(s) = status {
+                        if s == "running" {
+                            run.output.clear();
+                        }
+                        run.status = s.to_string();
+                        run.exit_code = code;
+                    }
+                    if let Some(c) = chunk {
+                        run.output.push_str(c);
+                        if run.output.len() > 2 * CHECK_OUTPUT_KEPT {
+                            proc::keep_tail(&mut run.output, CHECK_OUTPUT_KEPT);
+                        }
+                    }
+                }
                 emit(serde_json::json!({ "name": def.name, "status": status, "chunk": chunk, "exitCode": code }))
             };
             event(Some("running"), None, None);
@@ -241,7 +284,7 @@ impl AppState {
     /// Keeps the review for stdout; the caller ends the run.
     fn submit(&self, result: serde_json::Value, markdown: String) {
         // Submitted comments must not come back as pending drafts next time.
-        if let Some(cur) = self.current() {
+        if let (Some(cur), Ok(_one)) = (self.current(), self.state_lock.lock()) {
             if let Some(mut st) = read_state(&self.state_dir, &cur.snapshot.head.name) {
                 st["drafts"] = serde_json::json!([]);
                 let _ = write_state(&self.state_dir, &cur.snapshot.head.name, &st);
@@ -338,7 +381,8 @@ fn write_state(state_dir: &Path, branch: &str, state: &serde_json::Value) -> Res
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = p.with_extension("json.tmp");
+    // Its own temporary file, so two runs on the branch never mix their writes.
+    let tmp = p.with_extension(format!("{}.tmp", unique_name("json")));
     std::fs::write(&tmp, serde_json::to_vec_pretty(state).unwrap_or_default()).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
@@ -411,6 +455,11 @@ fn run_check(handle: tauri::AppHandle, app: App<'_>, name: String) -> Result<(),
 }
 
 #[tauri::command]
+fn check_runs(app: App<'_>) -> Vec<(String, CheckRun)> {
+    app.check_runs()
+}
+
+#[tauri::command]
 fn cancel_check(app: App<'_>, name: String) -> Result<(), String> {
     app.cancel_check(&name)
 }
@@ -480,7 +529,9 @@ fn open_external(target: &str) {
     } else {
         std::process::Command::new("xdg-open")
     };
-    let _ = cmd.arg(target).spawn();
+    // Not on our stdout: the review printed there is what the caller reads.
+    use std::process::Stdio;
+    let _ = cmd.arg(target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
 fn print_result(format: Format, result: &Option<(serde_json::Value, String)>) {
@@ -498,7 +549,7 @@ fn print_result(format: Format, result: &Option<(serde_json::Value, String)>) {
         (Format::Markdown, None) => {
             let _ = writeln!(
                 out,
-                "# Pull request preview: closed\n\nThe preview window was closed without submitting a review. No feedback was given."
+                "# Pull request preview: closed\n\nThe preview was closed without submitting a review. No feedback was given."
             );
         }
     }
@@ -630,10 +681,12 @@ fn main() {
             }
             std::process::exit(if failed > 0 { 1 } else { 0 });
         }
-        None => match cli.browser {
-            Some(browser) => serve::run(Arc::new(AppState::new(git, opts, cli.format, false)), &browser),
-            None => run_window(git, opts, cli.format),
-        },
+        // The self-tests exercise the native window.
+        None if cli.window || std::env::var_os("GH_PRV_LOCAL_SELFTEST").is_some() => run_window(git, opts, cli.format),
+        None => {
+            let browser = cli.browser.or_else(|| std::env::var("GH_PRV_LOCAL_BROWSER").ok()).unwrap_or_default();
+            serve::run(Arc::new(AppState::new(git, opts, cli.format, false)), browser.trim())
+        }
     }
 }
 
@@ -675,6 +728,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
             list_checks,
             run_check,
             cancel_check,
+            check_runs,
             find_pr,
             publish,
             submit_review,

@@ -125,6 +125,9 @@ export function paintMatches(query: string, current: FindMatch | null) {
     for (const cell of entry.querySelectorAll<HTMLElement>('td[data-find]')) {
       const inner = cell.querySelector('.diff-text-inner')
       if (!inner) continue
+      // The cells on and near the screen, not the top of a long file.
+      const at = cell.getBoundingClientRect()
+      if (at.bottom < top || at.top > bottom) continue
       let nth = 0
       for (const m of (inner.textContent ?? '').matchAll(re)) {
         const here = isFile && current!.cell === cell.dataset.find && current!.nth === nth

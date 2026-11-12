@@ -9,7 +9,7 @@ import '@primer/primitives/dist/css/functional/themes/dark-high-contrast.css'
 import '@wooorm/starry-night/style/core'
 import './styles/prv.css'
 import { App } from './App'
-import { createTransport } from './transport'
+import { createTransport, type Transport } from './transport'
 import { useStore } from './store'
 import { runSelftest } from './selftest'
 
@@ -28,8 +28,38 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
+/**
+ * Links never take the review away: other sites open in a new tab (the native window hands them to
+ * the browser itself), and paths relative to this page (in a comment, say) do nothing. In a browser
+ * tab, leaving with a review being written asks first.
+ */
+function keepThePage(kind: Transport['kind']) {
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return
+    const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+    if (!a || (a.getAttribute('href') ?? '').startsWith('#')) return
+    const url = new URL(a.href, location.href)
+    if (url.protocol === 'mailto:') return
+    if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) {
+      if (kind === 'native') return
+      e.preventDefault()
+      window.open(url.href, '_blank', 'noopener,noreferrer')
+      return
+    }
+    e.preventDefault()
+  })
+  if (kind === 'browser')
+    window.addEventListener('beforeunload', (e) => {
+      const s = useStore.getState()
+      if (!s.submitted && (s.reviewDraft.body.trim() || s.composing)) e.preventDefault()
+    })
+}
+
 createTransport()
-  .then((t) => useStore.getState().init(t))
+  .then((t) => {
+    keepThePage(t.kind)
+    return useStore.getState().init(t)
+  })
   .catch((e) => useStore.setState({ error: String(e), loading: false }))
   .finally(() => {
     const mode = (window as unknown as { __PRV_SELFTEST__?: true | 'flows' }).__PRV_SELFTEST__
