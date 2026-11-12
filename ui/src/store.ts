@@ -196,6 +196,8 @@ function stateOf(s: Store): PersistedState {
 }
 
 /** Saves immediately (comments, viewed) or debounced (typing in title/description). */
+/** Loads asked for (commit ranges): only the newest one's answer is used. */
+let reloads = 0
 /** Saves go one after another, so an older one never lands after a newer one. */
 let saving: Promise<unknown> = Promise.resolve()
 function persist(get: () => Store, delay = 0) {
@@ -308,12 +310,16 @@ export const useStore = create<Store>((set, get) => ({
     const t = get().transport
     if (!t) return
     const range = q ?? get().range
+    const id = ++reloads
     set({ loading: true, composing: null, selection: null })
     try {
       const snapshot = await t.getSnapshot(range)
+      // A newer load was asked for meanwhile: this one is stale.
+      if (id !== reloads) return
       // Invalidate contents only once the new snapshot is current on both sides.
       set((s) => ({ snapshot, range, loading: false, generation: s.generation + 1, contents: {}, hl: {}, fileUI: {} }))
     } catch (e) {
+      if (id !== reloads) return
       set({ error: String(e), loading: false })
     }
   },

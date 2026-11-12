@@ -146,21 +146,23 @@ async function createHttp(): Promise<Transport> {
   }
   const code = sessionStorage.getItem('prv:code')
   if (code) {
-    let body: { ok?: string; error?: string } = {}
-    for (let attempt = 0; attempt < 3 && !body.ok && !body.error; attempt++) {
-      try {
-        const r = await fetch('/api/session', { method: 'POST', headers: { 'X-Prv-Code': code } })
-        // An answer cut short (a reload, a dropped connection) is tried again like no answer.
-        body = (await r.json()) as typeof body
-      } catch {
-        await new Promise((r) => setTimeout(r, 500))
-      }
+    let failure = ''
+    let r: Response | null = null
+    try {
+      r = await fetch('/api/session', { method: 'POST', headers: { 'X-Prv-Code': code } })
+    } catch {
+      // The request may never have arrived: the code stays for a reload to try again.
+      failure = 'gh-prv-local does not answer. Is it still running? Reload this page, or run gh-prv-local again.'
     }
-    if (body.ok) sessionStorage.setItem('prv:token', body.ok)
-    if (body.ok || body.error) sessionStorage.removeItem('prv:code')
+    if (r) {
+      // Answered: the code is spent either way (a lost answer cannot be asked for again).
+      sessionStorage.removeItem('prv:code')
+      const body = (await r.json().catch(() => null)) as { ok?: string; error?: string } | null
+      if (body?.ok) sessionStorage.setItem('prv:token', body.ok)
+      else failure = body?.error ?? `gh-prv-local refused this page (${r.status}). Run gh-prv-local again and open the address it prints.`
+    }
     // A reload of the first address still has its token; anything else cannot go on.
-    if (!sessionStorage.getItem('prv:token'))
-      throw new Error(body.error ?? 'gh-prv-local does not answer. Is it still running? Run it again to get a new address.')
+    if (!sessionStorage.getItem('prv:token')) throw new Error(failure)
   }
   const token = sessionStorage.getItem('prv:token')
   if (!token) throw new Error('This page has no access to gh-prv-local. Open the address gh-prv-local printed when it started (each address works once).')

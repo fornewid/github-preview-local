@@ -26,9 +26,13 @@ const GONE_AFTER: Duration = Duration::from_secs(15);
 const HEARTBEAT: Duration = Duration::from_secs(5);
 /// A response (or a line of the event stream) not taken in this long ends the connection.
 const WRITE_TIME: Duration = Duration::from_secs(20);
-/// Event lines waiting for a slow page; a page further behind is dropped (it reconnects and
-/// catches up from the record).
+/// Event lines waiting for a slow page, and their bytes; a page further behind is dropped (it
+/// reconnects and catches up from the record).
 const STREAM_BACKLOG: usize = 4096;
+const STREAM_BACKLOG_BYTES: usize = 8 * 1024 * 1024;
+/// A page whose stream was dropped for not reading (a sleeping laptop, a frozen tab) is still
+/// there, just not reading: it counts as gone only after this long without news from it.
+const STALLED_GRACE: Duration = Duration::from_secs(600);
 /// Connections handled at once (a page needs a few); more are turned away.
 const MAX_CONNECTIONS: usize = 64;
 /// No page ever opened by then (no browser, an address never visited): the run ends as closed.
@@ -44,11 +48,15 @@ struct Server {
     launch: Mutex<Option<String>>,
     port: u16,
     /// Open event streams (one per page).
-    streams: Mutex<Vec<mpsc::SyncSender<String>>>,
+    streams: Mutex<Vec<(mpsc::SyncSender<String>, Arc<AtomicUsize>)>>,
     pages: AtomicUsize,
     connections: AtomicUsize,
+    /// Calls being answered: a page waiting for one (a first load with a fetch) is there.
+    busy: AtomicUsize,
     seen_page: AtomicBool,
     last_page: Mutex<Instant>,
+    /// Until when a page that stopped reading still counts as there.
+    stalled_until: Mutex<Option<Instant>>,
     submitted: AtomicBool,
     interrupted: AtomicBool,
 }
@@ -56,6 +64,7 @@ struct Server {
 pub fn run(state: Arc<AppState>, browser: &str) -> ! {
     let port = std::env::var("GH_PRV_LOCAL_PORT")
         .ok()
+        .filter(|p| !p.trim().is_empty())
         .map(|p| p.trim().parse::<u16>().unwrap_or_else(|_| fail(format!("GH_PRV_LOCAL_PORT is not a port: {p}"))));
     let listener = match port {
         Some(p) => TcpListener::bind(("127.0.0.1", p)).unwrap_or_else(|e| fail(format!("cannot listen on 127.0.0.1:{p}: {e}"))),
@@ -72,8 +81,10 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         streams: Mutex::new(vec![]),
         pages: AtomicUsize::new(0),
         connections: AtomicUsize::new(0),
+        busy: AtomicUsize::new(0),
         seen_page: AtomicBool::new(false),
         last_page: Mutex::new(Instant::now()),
+        stalled_until: Mutex::new(None),
         submitted: AtomicBool::new(false),
         interrupted: AtomicBool::new(false),
     });
@@ -99,7 +110,9 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         let seen = srv.seen_page.load(Ordering::SeqCst);
         let gone = seen
             && srv.pages.load(Ordering::SeqCst) == 0
-            && srv.last_page.lock().map(|t| t.elapsed() > GONE_AFTER).unwrap_or(false);
+            && srv.busy.load(Ordering::SeqCst) == 0
+            && srv.last_page.lock().map(|t| t.elapsed() > GONE_AFTER).unwrap_or(false)
+            && srv.stalled_until.lock().map(|t| t.is_none_or(|t| Instant::now() > t)).unwrap_or(true);
         if gone {
             break;
         }
@@ -281,7 +294,8 @@ fn read_request(stream: &TcpStream) -> Option<(Request, Vec<u8>)> {
 fn read_body(stream: &TcpStream, req: &mut Request, buffered: Vec<u8>) -> Result<(), &'static str> {
     let len: usize = match req.header("content-length") {
         None => 0,
-        Some(v) => v.trim().parse().map_err(|_| "400 Bad Request")?,
+        Some(v) if !v.trim().is_empty() && v.trim().bytes().all(|b| b.is_ascii_digit()) => v.trim().parse().map_err(|_| "400 Bad Request")?,
+        Some(_) => return Err("400 Bad Request"),
     };
     if len > MAX_BODY {
         return Err("413 Content Too Large");
@@ -360,9 +374,10 @@ impl Server {
                 });
                 match traded {
                     Some(_) => {
-                        // A page is here (until its event stream opens, this counts as it).
-                        self.seen_page.store(true, Ordering::SeqCst);
+                        // A page is here (until its event stream opens, this counts as it). Its
+                        // time first, so the run never sees a page with no time.
                         self.touch();
+                        self.seen_page.store(true, Ordering::SeqCst);
                         respond(&stream, "200 OK", "application/json", json!({ "ok": self.token }).to_string().as_bytes(), &[])
                     }
                     None => respond(
@@ -396,7 +411,11 @@ impl Server {
                                 Err(_) => return respond(&stream, "400 Bad Request", "text/plain", b"the body is not JSON", &[]),
                             }
                         };
-                        let (status, body) = match self.call(name, &args) {
+                        self.busy.fetch_add(1, Ordering::SeqCst);
+                        let answer = self.call(name, &args);
+                        self.touch();
+                        self.busy.fetch_sub(1, Ordering::SeqCst);
+                        let (status, body) = match answer {
                             Ok(v) => ("200 OK", json!({ "ok": v })),
                             Err(e) => ("500 Internal Server Error", json!({ "error": e })),
                         };
@@ -457,7 +476,13 @@ impl Server {
     /// catches up from the record).
     fn broadcast(&self, line: String) {
         if let Ok(mut streams) = self.streams.lock() {
-            streams.retain(|tx| tx.try_send(line.clone()).is_ok());
+            streams.retain(|(tx, queued)| {
+                if queued.load(Ordering::SeqCst) + line.len() > STREAM_BACKLOG_BYTES {
+                    return false;
+                }
+                queued.fetch_add(line.len(), Ordering::SeqCst);
+                tx.try_send(line.clone()).is_ok()
+            });
         }
     }
 
@@ -470,6 +495,7 @@ impl Server {
             return;
         }
         let (tx, rx) = mpsc::sync_channel(STREAM_BACKLOG);
+        let queued = Arc::new(AtomicUsize::new(0));
         {
             // First line: each check's run so far, taken with the stream added under the record's
             // lock (see AppState::run_check), so no output is both in it and on the stream.
@@ -477,18 +503,30 @@ impl Server {
             let record: Vec<_> = runs.as_ref().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
             let _ = tx.try_send(json!({ "runs": record }).to_string());
             if let Ok(mut streams) = self.streams.lock() {
-                streams.push(tx);
+                streams.push((tx, queued.clone()));
             }
         }
         self.pages.fetch_add(1, Ordering::SeqCst);
         self.seen_page.store(true, Ordering::SeqCst);
+        if let Ok(mut t) = self.stalled_until.lock() {
+            *t = None;
+        }
         loop {
             let line = match rx.recv_timeout(HEARTBEAT) {
-                Ok(l) => l,
+                Ok(l) => {
+                    queued.fetch_sub(l.len().min(queued.load(Ordering::SeqCst)), Ordering::SeqCst);
+                    l
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => String::new(),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if stream.write_all(format!("{line}\n").as_bytes()).and_then(|_| stream.flush()).is_err() {
+            if let Err(e) = stream.write_all(format!("{line}\n").as_bytes()).and_then(|_| stream.flush()) {
+                // Not reading, but connected: still there (it catches up when it reads again).
+                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
+                    if let Ok(mut t) = self.stalled_until.lock() {
+                        *t = Some(Instant::now() + STALLED_GRACE);
+                    }
+                }
                 break;
             }
         }

@@ -122,8 +122,9 @@ struct AppState {
     check_runs: Arc<Mutex<HashMap<String, CheckRun>>>,
     /// One write of the state file at a time (a browser tab's saves arrive on several threads).
     state_lock: Mutex<()>,
-    /// One snapshot at a time, so a slower one never replaces a newer one.
+    /// One snapshot at a time; only the newest asked for becomes current.
     snapshot_lock: Mutex<()>,
+    snapshot_ticket: std::sync::atomic::AtomicU64,
     /// The review was taken: later saves (still on their way) must not bring its comments back.
     submitted: AtomicBool,
 }
@@ -157,6 +158,7 @@ impl AppState {
             check_runs: Arc::new(Mutex::new(HashMap::new())),
             state_lock: Mutex::new(()),
             snapshot_lock: Mutex::new(()),
+            snapshot_ticket: std::sync::atomic::AtomicU64::new(0),
             submitted: AtomicBool::new(false),
         }
     }
@@ -177,7 +179,13 @@ impl AppState {
             return Err("load the full comparison first".into());
         }
         let range = RangeInfo { from, to };
+        let ticket = self.snapshot_ticket.fetch_add(1, Ordering::SeqCst) + 1;
+        let newest = || self.snapshot_ticket.load(Ordering::SeqCst) == ticket;
         let _one = self.snapshot_lock.lock().map_err(|e| e.to_string())?;
+        // A newer one was asked for meanwhile: this answer would be stale (the page ignores it).
+        if !newest() {
+            return Err("superseded by a newer load".into());
+        }
         let mut opts = self.opts.clone();
         // Fetch until a load has succeeded once.
         if self.loaded_once.load(Ordering::SeqCst) {
@@ -185,6 +193,9 @@ impl AppState {
         }
         let r = git::snapshot(&self.git, &opts, &range)?;
         self.loaded_once.store(true, Ordering::SeqCst);
+        if !newest() {
+            return Err("superseded by a newer load".into());
+        }
         let snap = r.snapshot.clone();
         *self.current.lock().map_err(|e| e.to_string())? = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
         Ok(snap)
@@ -210,10 +221,14 @@ impl AppState {
         }
         let Some(cur) = self.current() else { return Ok(()) };
         let _one = self.state_lock.lock().map_err(|e| e.to_string())?;
+        // After the submit, a save still on its way keeps what it says except the comments.
+        let mut state = state.clone();
         if self.submitted.load(Ordering::SeqCst) {
-            return Ok(());
+            if let Some(obj) = state.as_object_mut() {
+                obj.insert("drafts".into(), serde_json::json!([]));
+            }
         }
-        write_state(&self.state_dir, &cur.snapshot.head.name, state)
+        write_state(&self.state_dir, &cur.snapshot.head.name, &state)
     }
 
     fn check_runs(&self) -> Vec<(String, CheckRun)> {
@@ -306,8 +321,9 @@ impl AppState {
     /// Keeps the review for stdout; the caller ends the run.
     fn submit(&self, result: serde_json::Value, markdown: String) {
         // Submitted comments must not come back as pending drafts next time.
-        if let (Some(cur), Ok(_one)) = (self.current(), self.state_lock.lock()) {
-            self.submitted.store(true, Ordering::SeqCst);
+        let _one = self.state_lock.lock();
+        self.submitted.store(true, Ordering::SeqCst);
+        if let Some(cur) = self.current() {
             if let Some(mut st) = read_state(&self.state_dir, &cur.snapshot.head.name) {
                 if let Some(obj) = st.as_object_mut() {
                     obj.insert("drafts".into(), serde_json::json!([]));
@@ -342,7 +358,11 @@ impl AppState {
             let mut cmd = std::process::Command::new(prog);
             cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
             proc::own_group(&mut cmd);
-            cmd.spawn().is_ok()
+            // One that ends at once with an error (a terminal editor without a terminal) did not open.
+            cmd.spawn().is_ok_and(|mut child| {
+                std::thread::sleep(Duration::from_millis(300));
+                !matches!(child.try_wait(), Ok(Some(status)) if !status.success())
+            })
         };
         if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
             if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {
