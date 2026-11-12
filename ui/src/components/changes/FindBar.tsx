@@ -60,6 +60,12 @@ export function FindBar({ files }: { files: FileDiff[] }) {
   // typing pauses (each match it passes may open a file). Other changes, such as a file marked
   // viewed, keep the current match.
   const searched = useRef('')
+  /** The first match at or below the top of the window. */
+  const firstBelowTop = () => {
+    const order = new Map(files.map((f, i) => [f.path, i]))
+    const top = files.findIndex((f) => (document.getElementById(anchorFor(f.path))?.getBoundingClientRect().bottom ?? 0) > 80)
+    return Math.max(0, matches.findIndex((m) => (order.get(m.path) ?? 0) >= top))
+  }
   // The pending first jump of a new search; a step (Enter, Cmd+G) cancels it.
   const jump = useRef(0)
   useEffect(() => {
@@ -78,13 +84,14 @@ export function FindBar({ files }: { files: FileDiff[] }) {
       jump.current = 0
       // Done only once it happened, so a search interrupted by other changes is started again.
       searched.current = key
-      const order = new Map(files.map((f, i) => [f.path, i]))
-      const top = files.findIndex((f) => (document.getElementById(anchorFor(f.path))?.getBoundingClientRect().bottom ?? 0) > 80)
-      const first = Math.max(0, matches.findIndex((m) => (order.get(m.path) ?? 0) >= top))
+      const first = firstBelowTop()
       setIndex(first)
       go(matches[first])
     }, 250)
-    return () => clearTimeout(jump.current)
+    return () => {
+      clearTimeout(jump.current)
+      jump.current = 0
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, matches])
 
@@ -92,10 +99,13 @@ export function FindBar({ files }: { files: FileDiff[] }) {
     (by: number) => {
       if (!matches.length) return
       if (jump.current) {
-        // Typed and stepped at once: the search counts as done, from here.
+        // Typed and stepped at once: that step is the search's first jump.
         clearTimeout(jump.current)
         jump.current = 0
         searched.current = `${query}\n${split}\n${whitespace}`
+        const first = firstBelowTop()
+        setIndex(first)
+        return go(matches[first])
       }
       const next = (at + by + matches.length) % matches.length
       setIndex(next)

@@ -48,10 +48,18 @@ function keepThePage(kind: Transport['kind']) {
     }
     e.preventDefault()
   })
+  // A file dropped anywhere would replace the page (nothing here takes files).
+  for (const type of ['dragover', 'drop'])
+    window.addEventListener(type, (e) => {
+      if (!e.defaultPrevented) e.preventDefault()
+    })
   if (kind === 'browser')
     window.addEventListener('beforeunload', (e) => {
       const s = useStore.getState()
-      if (!s.submitted && (s.reviewDraft.body.trim() || s.composing)) e.preventDefault()
+      if (!s.submitted && (s.reviewDraft.body.trim() || s.composing)) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
     })
 }
 

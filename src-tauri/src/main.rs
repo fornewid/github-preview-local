@@ -135,8 +135,8 @@ struct CheckRun {
 /// Output kept per check for a reloaded tab (the page keeps 200 000 characters).
 const CHECK_OUTPUT_KEPT: usize = 256 * 1024;
 
-/// What the page asks for, the same in the native window (Tauri IPC) and in a browser tab
-/// (`--browser`, serve.rs). Blocking: callers run them off the UI thread.
+/// What the page asks for, the same in a browser tab (HTTP, serve.rs) and in the native window
+/// (`--window`, Tauri IPC). Blocking: callers run them off the UI thread.
 impl AppState {
     fn new(git: Git, opts: Options, format: Format, selftest: bool) -> AppState {
         AppState {
@@ -383,8 +383,11 @@ fn write_state(state_dir: &Path, branch: &str, state: &serde_json::Value) -> Res
     }
     // Its own temporary file, so two runs on the branch never mix their writes.
     let tmp = p.with_extension(format!("{}.tmp", unique_name("json")));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(state).unwrap_or_default()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
+    let written = std::fs::write(&tmp, serde_json::to_vec_pretty(state).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &p));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.map_err(|e| e.to_string())
 }
 
 /// `<prefix>-<pid>-<nanoseconds>`: a file name no other gh-prv-local run picks at the same time.
@@ -487,6 +490,11 @@ fn selftest_log(app: App<'_>, report: serde_json::Value) {
     if app.selftest {
         print_report(&report);
     }
+}
+
+/// `GH_PRV_LOCAL_SELFTEST` (`1` or `flows`); empty or `0` is off.
+fn selftest_mode() -> Option<String> {
+    std::env::var("GH_PRV_LOCAL_SELFTEST").ok().filter(|v| !v.is_empty() && v != "0")
 }
 
 fn print_report(report: &serde_json::Value) {
@@ -682,7 +690,7 @@ fn main() {
             std::process::exit(if failed > 0 { 1 } else { 0 });
         }
         // The self-tests exercise the native window.
-        None if cli.window || std::env::var_os("GH_PRV_LOCAL_SELFTEST").is_some() => run_window(git, opts, cli.format),
+        None if cli.window || selftest_mode().is_some() => run_window(git, opts, cli.format),
         None => {
             let browser = cli.browser.or_else(|| std::env::var("GH_PRV_LOCAL_BROWSER").ok()).unwrap_or_default();
             serve::run(Arc::new(AppState::new(git, opts, cli.format, false)), browser.trim())
@@ -707,8 +715,8 @@ fn run_window(git: Git, opts: Options, format: Format) {
         "Pull request preview · {}",
         git.root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
     );
-    let selftest = std::env::var_os("GH_PRV_LOCAL_SELFTEST").is_some();
-    let flows = std::env::var("GH_PRV_LOCAL_SELFTEST").as_deref() == Ok("flows");
+    let selftest = selftest_mode().is_some();
+    let flows = selftest_mode().as_deref() == Some("flows");
     // `flows` clicks Confirm, which pushes and opens a pull request: only in a scratch repository
     // that scripts/native-selftest.sh prepared (and marked).
     if flows {

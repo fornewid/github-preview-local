@@ -25,8 +25,9 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   (fetched first), rename detection, `.gitattributes` `linguist-generated`, lock files
   collapsed, binary / submodule / mode changes, CRLF, *No newline at end of file*.
 - **A browser tab, or a native window**: the page opens in a browser tab (like plannotator),
-  served on 127.0.0.1 for that run only: every request needs the run's token and must come from
-  that page, and closing the tab ends the run. With `--window` it opens in a native window
+  served on 127.0.0.1 for that run only: every call needs the run's token (traded once for the
+  one-time code in the address it opens) and must come from that page, and closing the tab ends
+  the run (so does a page never opened within 10 minutes). With `--window` it opens in a native window
   instead (system WebView via Tauri), which talks to the CLI over IPC: nothing listens on a port.
 - **Talks to `origin` only**: gh-prv-local fetches the base branch from `origin` (skip with `--no-fetch`),
   looks up an open pull request on origin's GitHub host when you choose *Confirm*, and pushes and
@@ -112,7 +113,7 @@ gh-prv-local list-checks             # show configured / auto-detected checks
 Settings from the gear menu (*Unified / Split*, *Whitespace changes*, *Minimize comments* — `i`,
 *Compact line height*) are remembered, like on GitHub. `t` focuses the file filter. The side
 panel can be resized by dragging its edge. Cmd/Ctrl + `=` / `-` / `0` zoom the native window (the
-level is remembered); in a browser (`gh-prv-local export`) use the browser's zoom.
+level is remembered); in a browser tab (and an export) use the browser's zoom.
 
 ### Reviewing
 
@@ -185,8 +186,9 @@ gh-prv-local (Rust CLI)                                     browser tab (HTTP, 1
 
 For a browser tab, the CLI serves the page and the window's calls over HTTP on 127.0.0.1 (port
 19514, or a free one; `GH_PRV_LOCAL_PORT` picks it, e.g. to forward it over SSH with
-`--browser=none`). The address it opens carries a token made for that run; the page sends it with
-every call, and the server also checks the `Host`, `Origin` and `Sec-Fetch-Site` headers.
+`--browser=none`). The address it opens carries a one-time code: the page trades it for the run's
+token once (so the address is useless to anyone who sees it later), sends the token with every
+call, and the server also checks the `Host`, `Origin` and `Sec-Fetch-Site` headers.
 
 The UI is a single HTML file (highlighter worker and WASM inlined) embedded in the binary;
 `gh-prv-local export` writes the same file with the data embedded.

@@ -18,7 +18,8 @@ https://github.com/fornewid/github-preview-local#install
 ## Run it
 
 It runs until the user submits a review (or closes the tab or window), which can take longer than
-a foreground command timeout. Run it **in the background** and wait for it to finish:
+a foreground command timeout. Run it **in the background** and wait for it to finish. It prints the
+page's address on stderr; if no browser opened (e.g. no display), give the user that address:
 
 ```bash
 gh-prv-local                 # compare HEAD with the remote default branch (fetches the base first)

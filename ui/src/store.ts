@@ -196,11 +196,15 @@ function stateOf(s: Store): PersistedState {
 }
 
 /** Saves immediately (comments, viewed) or debounced (typing in title/description). */
+/** Saves go one after another, so an older one never lands after a newer one. */
+let saving: Promise<unknown> = Promise.resolve()
 function persist(get: () => Store, delay = 0) {
   clearTimeout(saveTimer)
   const save = () => {
-    const s = get()
-    if (s.transport && s.snapshot) void s.transport.saveState(s.snapshot, stateOf(s))
+    saving = saving.then(() => {
+      const s = get()
+      return s.transport && s.snapshot ? s.transport.saveState(s.snapshot, stateOf(s)).catch(() => {}) : undefined
+    })
   }
   if (delay) saveTimer = setTimeout(save, delay)
   else save()
@@ -277,7 +281,8 @@ export const useStore = create<Store>((set, get) => ({
       set((s) => ({
         checks: s.checks.map((c) => {
           if (c.name !== e.name) return c
-          let output = e.status === 'running' ? '' : c.output
+          // `output`: the whole output so far (a tab catching up), in place of what it had.
+          let output = e.output ?? (e.status === 'running' ? '' : c.output)
           if (e.chunk) {
             output += e.chunk
             if (output.length > MAX_CHECK_OUTPUT) output = '…\n' + output.slice(-MAX_CHECK_OUTPUT)
@@ -287,8 +292,8 @@ export const useStore = create<Store>((set, get) => ({
             status: e.status ?? c.status,
             exitCode: e.exitCode ?? c.exitCode,
             output,
-            startedAt: e.status === 'running' ? new Date().toISOString() : c.startedAt,
-            finishedAt: finished(e.status) ? new Date().toISOString() : c.finishedAt,
+            startedAt: e.status === 'running' && e.output == null ? new Date().toISOString() : c.startedAt,
+            finishedAt: finished(e.status) && e.output == null ? new Date().toISOString() : c.finishedAt,
           }
         }),
       }))
@@ -503,12 +508,10 @@ export const useStore = create<Store>((set, get) => ({
     const markdown = formatReview(result, snapshot)
     clearTimeout(saveTimer)
     const lastReview = { head: snapshot.head.sha, at: new Date().toISOString() }
-    // Persist the cleared drafts *before* gh-prv-local exits (it clears them too).
-    try {
-      await transport.saveState(snapshot, { ...stateOf(get()), drafts: [], lastReview })
-    } catch {
-      /* never lose the review because of a failed save */
-    }
+    // Persist the cleared drafts *before* gh-prv-local exits (it clears them too), after any save
+    // still on its way; a failed save never loses the review.
+    saving = saving.then(() => transport.saveState(snapshot, { ...stateOf(get()), drafts: [], lastReview }).catch(() => {}))
+    await saving
     try {
       await transport.submit(result, markdown)
     } catch (e) {

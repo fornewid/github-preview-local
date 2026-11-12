@@ -18,7 +18,7 @@ function start(port) {
   let err = ''
   p.stdout.on('data', (d) => (out += d))
   p.stderr.on('data', (d) => (err += d))
-  const url = new Promise((res) => p.stderr.on('data', () => { const m = err.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[0-9a-f]+/); if (m) res(m[0]) }))
+  const url = new Promise((res) => p.stderr.on('data', () => { const m = err.match(/http:\/\/127\.0\.0\.1:\d+\/\?code=[0-9a-f]+/); if (m) res(m[0]) }))
   const exit = new Promise((res) => p.on('exit', (code) => res(code)))
   return { p, url, exit, out: () => out, err: () => err }
 }
@@ -28,7 +28,19 @@ function start(port) {
   const run = start(19611)
   const url = await run.url
   const origin = url.split('/?')[0]
-  const token = url.split('token=')[1]
+  const launch = url.split('code=')[1]
+  // The page trades the one-time code in the address for this run's token.
+  const { browser, ctx, page: tab } = await openChrome({ width: 1440, height: 900 })
+  const external = []
+  ctx.on('request', (r) => r.url().startsWith(origin) || /^(data|blob):/.test(r.url()) || external.push(r.url()))
+  await tab.goto(url)
+  await tab.waitForSelector('.DiffEntry', { timeout: 20000 })
+  check('page loads over HTTP and drops the code from the address', !tab.url().includes('code='), tab.url())
+  const token = await tab.evaluate(() => sessionStorage.getItem('prv:token'))
+  const trade = (c) => fetch(origin + '/api/session', { method: 'POST', headers: { 'X-Prv-Code': c } }).then((r) => r.status)
+  check('the code works once: a second use is refused', (await trade(launch)) === 401)
+  check('a wrong code is refused', (await trade('0'.repeat(32))) === 401)
+  check('the code is not the token', !!token && token !== launch)
   // Security: token, Host, Origin, Sec-Fetch-Site.
   const api = (headers, path = '/api/list_checks', method = 'POST') => fetch(origin + path, { method, headers, body: method === 'POST' ? '{}' : undefined }).then((r) => r.status)
   check('no token: 401', (await api({ 'Content-Type': 'application/json' })) === 401)
@@ -57,12 +69,6 @@ function start(port) {
     if (!st.ok) broken++
   }
   check('concurrent saves keep the state file valid', broken === 0, String(broken) + ' broken')
-  const { browser, ctx, page: tab } = await openChrome({ width: 1440, height: 900 })
-  const external = []
-  ctx.on('request', (r) => r.url().startsWith(origin) || /^(data|blob):/.test(r.url()) || external.push(r.url()))
-  await tab.goto(url)
-  await tab.waitForSelector('.DiffEntry', { timeout: 20000 })
-  check('page loads over HTTP and drops the token from the address', !tab.url().includes('token='), tab.url())
   check('connected: commit picker allows ranges', !(await tab.locator('.CommitPicker-note').count()))
   await tab.reload()
   await tab.waitForSelector('.DiffEntry', { timeout: 20000 })

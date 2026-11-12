@@ -39,6 +39,8 @@ export interface CheckEvent {
   status?: CheckStatus
   chunk?: string
   exitCode?: number | null
+  /** The whole output so far, replacing what the page has (catching up after a lost stream). */
+  output?: string
 }
 
 export interface Transport {
@@ -129,20 +131,24 @@ function createNative(): Transport {
 }
 
 /**
- * A browser tab of `gh-prv-local --browser`: the window's commands over HTTP. Each request carries
- * this run's token, which came in the address the CLI opened (kept for reloads, dropped from the
- * address bar).
+ * A browser tab served by gh-prv-local: the window's commands over HTTP. Each request carries this
+ * run's token, which the page gets once for the one-time code in the address the CLI opened (then
+ * keeps for reloads; the code leaves the address bar).
  */
-function createHttp(): Transport {
+async function createHttp(): Promise<Transport> {
   const params = new URLSearchParams(location.search)
-  const fromUrl = params.get('token')
-  if (fromUrl) {
-    sessionStorage.setItem('prv:token', fromUrl)
-    params.delete('token')
+  const code = params.get('code')
+  if (code) {
+    params.delete('code')
     const rest = params.toString()
     history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`)
+    const r = await fetch('/api/session', { method: 'POST', headers: { 'X-Prv-Code': code } })
+    const body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }))
+    // A reload of the first address still has its token; anything else cannot go on.
+    if ('ok' in body) sessionStorage.setItem('prv:token', body.ok)
+    else if (!sessionStorage.getItem('prv:token')) throw new Error(body.error)
   }
-  const token = fromUrl ?? sessionStorage.getItem('prv:token') ?? ''
+  const token = sessionStorage.getItem('prv:token') ?? ''
   const call = async <T,>(cmd: string, args: Record<string, unknown> = {}): Promise<T> => {
     const r = await fetch(`/api/${cmd}`, {
       method: 'POST',
@@ -169,12 +175,8 @@ function createHttp(): Transport {
         // Back after a hiccup: catch up on what the checks did meanwhile (a fresh page does that
         // when it lists the checks).
         if (reconnect) {
-          const emit = (e: CheckEvent) => listeners.forEach((l) => l(e))
-          for (const [name, run] of await call<Array<[string, CheckRun]>>('check_runs')) {
-            emit({ name, status: 'running' })
-            if (run.output) emit({ name, chunk: run.output })
-            if (run.status !== 'running') emit({ name, status: run.status, exitCode: run.exitCode })
-          }
+          for (const [name, run] of await call<Array<[string, CheckRun]>>('check_runs'))
+            for (const l of listeners) l({ name, status: run.status, exitCode: run.exitCode, output: run.output })
         }
         reconnect = true
         const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
@@ -265,7 +267,7 @@ function createStatic(data: StaticData): Transport {
 
 export async function createTransport(): Promise<Transport> {
   if (window.__TAURI_INTERNALS__) return createNative()
-  if (window.__PRV_SERVER__) return createHttp()
+  if (window.__PRV_SERVER__) return await createHttp()
   if (window.__PRV_DATA__) return createStatic(window.__PRV_DATA__)
   // Development: `vite` serves `public/dev-data.json` produced by `gh-prv-local export --data`.
   const url = new URLSearchParams(location.search).get('data') ?? '/dev-data.json'

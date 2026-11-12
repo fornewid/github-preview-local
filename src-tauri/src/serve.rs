@@ -1,12 +1,13 @@
-//! `gh-prv-local --browser`: the review page in a browser tab instead of the native window. The page
-//! is served on 127.0.0.1 for this run only and asks for the same things the window does (see
-//! `AppState`) over HTTP. Every API request must carry this run's token, which the page sends in a
-//! header (other sites can neither read it nor send such a request without the server allowing it),
-//! name this host and port (no DNS rebinding) and come from this origin. The run ends when the
-//! review is submitted, when the tab has been gone for a while, or on Ctrl-C.
+//! The review page in a browser tab (the default; `--window` opens the native window instead). The
+//! page is served on 127.0.0.1 for this run only and asks for the same things the window does (see
+//! `AppState`) over HTTP. Every call must carry this run's token, which the page gets once for the
+//! one-time code in the address it was opened with and sends in a header (other sites can neither
+//! read it nor send such a request without the server allowing it); calls must also name this host
+//! and port (no DNS rebinding) and come from this origin. The run ends when the review is
+//! submitted, when the tab has been gone for a while, or on Ctrl-C.
 
 use crate::model::PublishRequest;
-use crate::{create_private, export, fail, proc, unique_name, AppState};
+use crate::{export, fail, proc, AppState};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -25,10 +26,17 @@ const GONE_AFTER: Duration = Duration::from_secs(15);
 const HEARTBEAT: Duration = Duration::from_secs(5);
 /// Connections handled at once (a page needs a few); more are turned away.
 const MAX_CONNECTIONS: usize = 64;
+/// No page ever opened by then (no browser, an address never visited): the run ends as closed.
+const NO_PAGE_AFTER: Duration = Duration::from_secs(600);
+/// Time a connection has to send its request line and headers.
+const HEADER_TIME: Duration = Duration::from_secs(5);
 
 struct Server {
     state: Arc<AppState>,
     token: String,
+    /// The one-time code in the address the browser is given (a command line other users of the
+    /// machine may see): the page trades it for `token` once, then it is spent.
+    launch: Mutex<Option<String>>,
     port: u16,
     /// Open event streams (one per page).
     streams: Mutex<Vec<mpsc::Sender<String>>>,
@@ -52,6 +60,7 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
     let srv = Arc::new(Server {
         state,
         token: token(),
+        launch: Mutex::new(Some(token())),
         port,
         streams: Mutex::new(vec![]),
         pages: AtomicUsize::new(0),
@@ -61,9 +70,10 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         submitted: AtomicBool::new(false),
         interrupted: AtomicBool::new(false),
     });
-    let url = format!("http://127.0.0.1:{port}/?token={}", srv.token);
+    let code = srv.launch.lock().ok().and_then(|c| c.clone()).unwrap_or_default();
+    let url = format!("http://127.0.0.1:{port}/?code={code}");
     eprintln!("gh-prv-local: reviewing in the browser at {url}");
-    let opener = open_browser(&url, browser);
+    open_browser(&url, browser);
     let started = Instant::now();
     let mut reminded = false;
     {
@@ -86,6 +96,10 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
             reminded = true;
             eprintln!("gh-prv-local: no page has opened yet; open {url}");
         }
+        if !seen && started.elapsed() > NO_PAGE_AFTER {
+            eprintln!("gh-prv-local: no page opened in {} minutes; stopping", NO_PAGE_AFTER.as_secs() / 60);
+            break;
+        }
         match listener.accept() {
             Ok((stream, _)) => {
                 if srv.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
@@ -96,17 +110,21 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
                 let _ = stream.set_nonblocking(false);
                 let srv = srv.clone();
                 std::thread::spawn(move || {
-                    Server::handle(&srv, stream);
-                    srv.connections.fetch_sub(1, Ordering::SeqCst);
+                    // Gives the slot back however the handler ends (a panic too).
+                    struct Slot(Arc<Server>);
+                    impl Drop for Slot {
+                        fn drop(&mut self) {
+                            self.0.connections.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    let slot = Slot(srv);
+                    Server::handle(&slot.0, stream);
                 });
             }
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
     srv.state.finish();
-    if let Some(file) = opener {
-        let _ = std::fs::remove_file(file);
-    }
     std::process::exit(if srv.interrupted.load(Ordering::SeqCst) { 130 } else { 0 })
 }
 
@@ -122,23 +140,12 @@ fn token() -> String {
         .collect()
 }
 
-/// Opens the page; returns the redirect file to remove at the end. The browser gets a private file
-/// that leads to the address, not the address itself: a command line (with the token) is visible
-/// to other users of the machine, a 0600 file is not (Jupyter does the same).
-fn open_browser(url: &str, browser: &str) -> Option<std::path::PathBuf> {
+/// Opens the address in the browser (directly, so its request counts as typed: `Sec-Fetch-Site: none`).
+fn open_browser(url: &str, browser: &str) {
     // `--browser=none`: only the address (open it yourself, e.g. through an SSH tunnel).
-    if browser == "none" {
-        return None;
+    if browser.eq_ignore_ascii_case("none") {
+        return;
     }
-    let file = std::env::temp_dir().join(format!("{}.html", unique_name("gh-prv-local-open")));
-    let page = format!(
-        "<!doctype html><meta charset=utf-8><meta name=referrer content=no-referrer>\
-         <meta http-equiv=refresh content=\"0;url={url}\"><title>gh-prv-local</title><a href=\"{url}\">Open the review</a>"
-    );
-    let target = match create_private(&file).and_then(|mut f| f.write_all(page.as_bytes())) {
-        Ok(()) => file.to_string_lossy().into_owned(),
-        Err(_) => url.to_string(),
-    };
     let mac_app = |b: &str| match b.to_ascii_lowercase().as_str() {
         "chrome" | "google-chrome" => "Google Chrome".to_string(),
         "edge" => "Microsoft Edge".to_string(),
@@ -165,9 +172,11 @@ fn open_browser(url: &str, browser: &str) -> Option<std::path::PathBuf> {
     } else {
         std::process::Command::new(if browser == "chrome" { "google-chrome" } else { browser })
     };
-    // Not on our stdout: the review printed there is what the caller reads.
+    // Not on our stdout (the review printed there is what the caller reads), and not in our process
+    // group (Ctrl-C there must not close a browser that this started).
     use std::process::Stdio;
-    match cmd.arg(&target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+    proc::own_group(&mut cmd);
+    match cmd.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(mut child) => {
             std::thread::spawn(move || {
                 if child.wait().is_ok_and(|s| !s.success()) {
@@ -177,7 +186,6 @@ fn open_browser(url: &str, browser: &str) -> Option<std::path::PathBuf> {
         }
         Err(_) => eprintln!("gh-prv-local: could not open a browser; open the address above yourself"),
     }
-    Some(file)
 }
 
 struct Request {
@@ -193,9 +201,22 @@ impl Request {
     }
 }
 
+/// Reads with a deadline for all of it (not per read, which a trickle of bytes would keep alive).
+struct Deadline<'a>(&'a TcpStream, Instant);
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.1.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.0.set_read_timeout(Some(left))?;
+        (&mut &*self.0).read(buf)
+    }
+}
+
 /// The request line and headers; the body is read after the request has been let in.
 fn read_request(stream: &TcpStream) -> Option<(Request, Vec<u8>)> {
-    let mut r = BufReader::new(stream.try_clone().ok()?.take(MAX_HEADERS));
+    let mut r = BufReader::new(Deadline(stream, Instant::now() + HEADER_TIME).take(MAX_HEADERS));
     let mut line = String::new();
     r.read_line(&mut line).ok()?;
     let mut parts = line.split_whitespace();
@@ -225,6 +246,7 @@ fn read_body(stream: &TcpStream, req: &mut Request, buffered: Vec<u8>) -> Option
     if len > MAX_BODY {
         return None;
     }
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut body = buffered;
     body.truncate(len);
     if body.len() < len {
@@ -271,8 +293,11 @@ impl Server {
         let here = [format!("127.0.0.1:{}", self.port), format!("localhost:{}", self.port)];
         let host_ok = req.header("host").is_some_and(|h| here.iter().any(|x| x == h));
         let origin_ok = req.header("origin").is_none_or(|o| here.iter().any(|x| o == format!("http://{x}")));
-        // A link or a form on another site, or a page that frames this one, is refused too.
-        let site_ok = req.header("sec-fetch-site").is_none_or(|s| s == "same-origin" || s == "none");
+        // Calls from another site's page are refused too. The page itself holds no data (it gets it
+        // through the calls), so it opens however the browser files the request from the system;
+        // other pages cannot frame it (CSP frame-ancestors).
+        let page = req.method == "GET" && req.path == "/";
+        let site_ok = page || req.header("sec-fetch-site").is_none_or(|s| s == "same-origin" || s == "none");
         if !host_ok || !origin_ok || !site_ok {
             return respond(&stream, "403 Forbidden", "text/plain", b"forbidden", &[]);
         }
@@ -281,6 +306,26 @@ impl Server {
             ("GET", "/") => {
                 let page = export::page_with("<script>window.__PRV_SERVER__=true;</script>");
                 respond(&stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), &[("Content-Security-Policy", &csp())])
+            }
+            // The page's first call: the one-time code for this run's token.
+            ("POST", "/api/session") => {
+                let given = req.header("x-prv-code").unwrap_or_default().to_string();
+                let traded = self.launch.lock().ok().and_then(|mut code| match code.as_deref() {
+                    Some(c) if same(c, &given) => code.take(),
+                    _ => None,
+                });
+                match traded {
+                    Some(_) => respond(&stream, "200 OK", "application/json", json!({ "ok": self.token }).to_string().as_bytes(), &[]),
+                    None => respond(
+                        &stream,
+                        "401 Unauthorized",
+                        "application/json",
+                        json!({ "error": "This review address was already opened (or is not this run's). Use the tab that is open, or run gh-prv-local again." })
+                            .to_string()
+                            .as_bytes(),
+                        &[],
+                    ),
+                }
             }
             (_, path) if path.starts_with("/api/") => {
                 if !req.header("x-prv-token").is_some_and(|t| same(t, &self.token)) {
