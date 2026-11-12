@@ -98,6 +98,14 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         }
         if !seen && started.elapsed() > NO_PAGE_AFTER {
             eprintln!("gh-prv-local: no page opened in {} minutes; stopping", NO_PAGE_AFTER.as_secs() / 60);
+            // Not "closed": nobody looked at it.
+            let minutes = NO_PAGE_AFTER.as_secs() / 60;
+            let markdown = format!(
+                "# Pull request preview: not opened\n\nNo browser page opened the review within {minutes} minutes, so gh-prv-local stopped. Nothing was reviewed."
+            );
+            if let Ok(mut r) = srv.state.result.lock() {
+                *r = Some((json!({ "event": "NOT_OPENED", "comments": [] }), markdown));
+            }
             break;
         }
         match listener.accept() {
@@ -110,7 +118,7 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
                 let _ = stream.set_nonblocking(false);
                 let srv = srv.clone();
                 std::thread::spawn(move || {
-                    // Gives the slot back however the handler ends (a panic too).
+                    // Gives the slot back however the handler returns.
                     struct Slot(Arc<Server>);
                     impl Drop for Slot {
                         fn drop(&mut self) {
@@ -128,16 +136,11 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
     std::process::exit(if srv.interrupted.load(Ordering::SeqCst) { 130 } else { 0 })
 }
 
-/// 128 random bits: SipHash keyed from the OS's random source (std's RandomState), so no extra crate.
+/// 128 bits from the system's random source.
 fn token() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    (0..2u64)
-        .map(|i| {
-            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_u64(i);
-            format!("{:016x}", h.finish())
-        })
-        .collect()
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).unwrap_or_else(|e| fail(format!("no random source: {e}")));
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Opens the address in the browser (directly, so its request counts as typed: `Sec-Fetch-Site: none`).
@@ -153,6 +156,25 @@ fn open_browser(url: &str, browser: &str) {
         "safari" => "Safari".to_string(),
         _ => b.to_string(),
     };
+    // The default browser on a Mac: the address goes to AppleScript on stdin, so no command line
+    // carries it (`open location` asks for no permission).
+    if cfg!(target_os = "macos") && browser.is_empty() {
+        use std::process::Stdio;
+        let script = format!("open location \"{url}\"");
+        let opened = std::process::Command::new("osascript")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .and_then(|mut child| {
+                child.stdin.take().map(|mut i| i.write_all(script.as_bytes()));
+                child.wait()
+            });
+        if opened.is_ok_and(|s| s.success()) {
+            return;
+        }
+    }
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         if !browser.is_empty() {
@@ -403,8 +425,15 @@ impl Server {
             return;
         }
         let (tx, rx) = mpsc::channel();
-        if let Ok(mut streams) = self.streams.lock() {
-            streams.push(tx);
+        {
+            // First line: each check's run so far, taken with the stream added under the record's
+            // lock (see AppState::run_check), so no output is both in it and on the stream.
+            let runs = self.state.check_runs.lock();
+            let record: Vec<_> = runs.as_ref().map(|r| r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+            let _ = tx.send(json!({ "runs": record }).to_string());
+            if let Ok(mut streams) = self.streams.lock() {
+                streams.push(tx);
+            }
         }
         self.pages.fetch_add(1, Ordering::SeqCst);
         self.seen_page.store(true, Ordering::SeqCst);

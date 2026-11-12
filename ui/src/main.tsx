@@ -48,10 +48,11 @@ function keepThePage(kind: Transport['kind']) {
     }
     e.preventDefault()
   })
-  // A file dropped anywhere would replace the page (nothing here takes files).
-  for (const type of ['dragover', 'drop'])
+  // A file dropped anywhere would replace the page (nothing here takes files); text still drops
+  // into the text boxes.
+  for (const type of ['dragover', 'drop'] as const)
     window.addEventListener(type, (e) => {
-      if (!e.defaultPrevented) e.preventDefault()
+      if (!e.defaultPrevented && e.dataTransfer?.types.includes('Files')) e.preventDefault()
     })
   if (kind === 'browser')
     window.addEventListener('beforeunload', (e) => {

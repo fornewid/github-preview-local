@@ -137,18 +137,32 @@ function createNative(): Transport {
  */
 async function createHttp(): Promise<Transport> {
   const params = new URLSearchParams(location.search)
-  const code = params.get('code')
-  if (code) {
+  if (params.has('code')) {
+    // Kept until it is traded, so a lost answer can be asked again (and a reload still has it).
+    sessionStorage.setItem('prv:code', params.get('code')!)
     params.delete('code')
     const rest = params.toString()
     history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`)
-    const r = await fetch('/api/session', { method: 'POST', headers: { 'X-Prv-Code': code } })
-    const body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }))
-    // A reload of the first address still has its token; anything else cannot go on.
-    if ('ok' in body) sessionStorage.setItem('prv:token', body.ok)
-    else if (!sessionStorage.getItem('prv:token')) throw new Error(body.error)
   }
-  const token = sessionStorage.getItem('prv:token') ?? ''
+  const code = sessionStorage.getItem('prv:code')
+  if (code) {
+    let body: { ok?: string; error?: string } = {}
+    for (let attempt = 0; attempt < 3 && !body.ok && !body.error; attempt++) {
+      try {
+        const r = await fetch('/api/session', { method: 'POST', headers: { 'X-Prv-Code': code } })
+        body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }))
+      } catch {
+        await new Promise((r) => setTimeout(r, 500))
+      }
+    }
+    if (body.ok) sessionStorage.setItem('prv:token', body.ok)
+    if (body.ok || body.error) sessionStorage.removeItem('prv:code')
+    // A reload of the first address still has its token; anything else cannot go on.
+    if (!sessionStorage.getItem('prv:token'))
+      throw new Error(body.error ?? 'gh-prv-local does not answer. Is it still running? Run it again to get a new address.')
+  }
+  const token = sessionStorage.getItem('prv:token')
+  if (!token) throw new Error('This page has no access to gh-prv-local. Open the address gh-prv-local printed when it started (each address works once).')
   const call = async <T,>(cmd: string, args: Record<string, unknown> = {}): Promise<T> => {
     const r = await fetch(`/api/${cmd}`, {
       method: 'POST',
@@ -166,19 +180,11 @@ async function createHttp(): Promise<Transport> {
   let done = false
   void (async () => {
     let failures = 0
-    let reconnect = false
     while (!done) {
       try {
         const r = await fetch('/api/events', { headers: { 'X-Prv-Token': token } })
         if (!r.ok || !r.body) throw new Error(`${r.status}`)
         failures = 0
-        // Back after a hiccup: catch up on what the checks did meanwhile (a fresh page does that
-        // when it lists the checks).
-        if (reconnect) {
-          for (const [name, run] of await call<Array<[string, CheckRun]>>('check_runs'))
-            for (const l of listeners) l({ name, status: run.status, exitCode: run.exitCode, output: run.output })
-        }
-        reconnect = true
         const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
         let buf = ''
         for (;;) {
@@ -188,7 +194,12 @@ async function createHttp(): Promise<Transport> {
           for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
             const line = buf.slice(0, i)
             buf = buf.slice(i + 1)
-            if (line) for (const l of listeners) l(JSON.parse(line) as CheckEvent)
+            if (!line) continue
+            const msg = JSON.parse(line) as CheckEvent | { runs: Array<[string, CheckRun]> }
+            // The first line: each check's run so far (catching up after a reload or a lost stream).
+            const events: CheckEvent[] =
+              'runs' in msg ? msg.runs.map(([name, run]) => ({ name, status: run.status, exitCode: run.exitCode, output: run.output })) : [msg]
+            for (const e of events) for (const l of listeners) l(e)
           }
         }
       } catch {

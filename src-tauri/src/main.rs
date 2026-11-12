@@ -228,7 +228,10 @@ impl AppState {
         let runs = self.check_runs.clone();
         std::thread::spawn(move || {
             let event = |status: Option<&str>, chunk: Option<&str>, code: Option<i32>| {
-                if let Ok(mut runs) = runs.lock() {
+                // Sent while the record is locked: a page that joins now (serve.rs) finds each
+                // event either in the record or on its stream, never in both.
+                let mut runs = runs.lock();
+                if let Ok(runs) = runs.as_mut() {
                     let run = runs.entry(def.name.clone()).or_default();
                     if let Some(s) = status {
                         if s == "running" {

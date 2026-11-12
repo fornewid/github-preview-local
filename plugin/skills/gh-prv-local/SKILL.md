@@ -39,6 +39,9 @@ When it exits, its stdout is the review:
 - `# Pull request preview: Confirmed` — the branch was pushed and the pull request opened (URL
   included). Do not push again.
 - `# Pull request preview: closed` — no feedback; do nothing.
+- `# Pull request preview: not opened` — no page opened the review within 10 minutes (no browser
+  came up, e.g. over SSH); tell the user and offer to run it again (`--browser=none` prints the
+  address to open).
 
 ## Other commands
 
