@@ -16,6 +16,8 @@ pub fn empty_tree(git: &Git) -> String {
 }
 const MAX_PATCH_BYTES: usize = 3 * 1024 * 1024;
 const MAX_BLOB_BYTES: usize = 5 * 1024 * 1024;
+/// Images shown in the diff (as data URLs) up to this size.
+const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Git {
@@ -963,32 +965,112 @@ fn diff_files(git: &Git, ends: &DiffEnds) -> Result<Vec<FileDiff>, String> {
             additions_w: add_w,
             deletions_w: del_w,
             too_large,
+            old_size: None,
+            new_size: None,
         });
     }
+    binary_sizes(git, &mut files);
     Ok(files)
 }
 
-/// Full file contents for highlighting and context expansion.
-pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side: &str) -> Option<String> {
-    let f = files.iter().find(|f| {
+/// The blob sizes of binary files, with one `git cat-file --batch-check`.
+fn binary_sizes(git: &Git, files: &mut [FileDiff]) {
+    let shas: Vec<&String> = files.iter().filter(|f| f.binary).flat_map(|f| [&f.old_sha, &f.new_sha]).flatten().collect();
+    if shas.is_empty() {
+        return;
+    }
+    let input: String = shas.iter().map(|s| format!("{s}\n")).collect();
+    let Some(child) = git.spawn_with_input(&["cat-file", "--batch-check"], input) else { return };
+    let Ok(out) = child.wait_with_output() else { return };
+    // "<sha> blob <size>" per line ("<sha> missing" for an object that is not there).
+    let sizes: HashMap<&str, u64> = std::str::from_utf8(&out.stdout)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(' ').collect();
+            (f.len() == 3 && f[1] == "blob").then(|| f[2].parse().ok().map(|n| (f[0], n))).flatten()
+        })
+        .collect();
+    for f in files.iter_mut().filter(|f| f.binary) {
+        f.old_size = f.old_sha.as_deref().and_then(|s| sizes.get(s).copied());
+        f.new_size = f.new_sha.as_deref().and_then(|s| sizes.get(s).copied());
+    }
+}
+
+/// The changed file at `path` on one side ("old": its path before a rename).
+fn find_side<'a>(files: &'a [FileDiff], path: &str, side: &str) -> Option<&'a FileDiff> {
+    files.iter().find(|f| {
         if side == "old" {
             f.status != "added" && f.old_path.as_deref().unwrap_or(&f.path) == path
         } else {
             f.status != "deleted" && f.path == path
         }
-    })?;
+    })
+}
+
+/// The bytes of that side of the file.
+fn side_bytes(git: &Git, ends: &DiffEnds, f: &FileDiff, path: &str, side: &str) -> Option<Vec<u8>> {
+    let sha = if side == "old" { &f.old_sha } else { &f.new_sha };
+    match sha {
+        Some(s) => git.bytes(&["cat-file", "blob", s]).ok(),
+        None => {
+            let treeish = if side == "old" { &ends.a } else { &ends.b };
+            git.bytes(&["show", &format!("{treeish}:{path}")]).ok()
+        }
+    }
+}
+
+/// Full file contents for highlighting and context expansion.
+pub fn contents(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side: &str) -> Option<String> {
+    let f = find_side(files, path, side)?;
     if f.binary || f.submodule {
         return None;
     }
-    let sha = if side == "old" { f.old_sha.clone() } else { f.new_sha.clone() };
-    let bytes = match sha {
-        Some(s) => git.bytes(&["cat-file", "blob", &s]).ok()?,
-        None => {
-            let treeish = if side == "old" { &ends.a } else { &ends.b };
-            git.bytes(&["show", &format!("{treeish}:{path}")]).ok()?
-        }
-    };
+    let bytes = side_bytes(git, ends, f, path, side)?;
     is_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// An image file as a `data:` URL, for the image diff (the page loads nothing from elsewhere).
+pub fn image(git: &Git, ends: &DiffEnds, files: &[FileDiff], path: &str, side: &str) -> Option<String> {
+    let f = find_side(files, path, side)?;
+    let mime = image_mime(path)?;
+    if !f.binary || f.submodule {
+        return None;
+    }
+    let bytes = side_bytes(git, ends, f, path, side)?;
+    (bytes.len() <= MAX_IMAGE_BYTES).then(|| format!("data:{mime};base64,{}", base64(&bytes)))
+}
+
+/// The image formats the diff shows (as github.com does), by file extension; ui/src/diff/util.ts
+/// has the same list.
+pub fn image_mime(path: &str) -> Option<&'static str> {
+    let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        _ => return None,
+    })
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = u32::from(chunk[0]) << 16 | u32::from(*chunk.get(1).unwrap_or(&0)) << 8 | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// A blob shown as text: within the size limit, and no NUL in its first 8000 bytes (git's binary test).
@@ -1050,6 +1132,48 @@ mod tests {
             assert!(ok);
         }
         (Git::discover(&dir).unwrap(), dir)
+    }
+
+    #[test]
+    fn base64_matches_the_rfc_vectors() {
+        let cases = [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")];
+        for (input, want) in cases {
+            assert_eq!(base64(input.as_bytes()), want);
+        }
+        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
+    }
+
+    #[test]
+    fn image_types() {
+        assert_eq!(image_mime("a/b.PNG"), Some("image/png"));
+        assert_eq!(image_mime("photo.jpeg"), Some("image/jpeg"));
+        assert_eq!(image_mime("icon.svg"), None); // text: shown as a source diff
+        assert_eq!(image_mime("Makefile"), None);
+    }
+
+    /// A changed PNG: both sizes in the snapshot, each side as a data URL; text files get neither.
+    #[test]
+    fn binary_sizes_and_images() {
+        let (git, dir) = scratch_repo(&[("user.name", "t"), ("user.email", "t@t"), ("commit.gpgsign", "false")]);
+        let png = |extra: &[u8]| [b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".as_slice(), extra].concat();
+        std::fs::write(dir.join("a.png"), png(b"one")).unwrap();
+        std::fs::write(dir.join("t.txt"), "x\n").unwrap();
+        git.run(&["add", "."]).unwrap();
+        git.run(&["commit", "-qm", "one"]).unwrap();
+        std::fs::write(dir.join("a.png"), png(b"three")).unwrap();
+        std::fs::write(dir.join("t.txt"), "y\n").unwrap();
+        git.run(&["commit", "-qam", "two"]).unwrap();
+        let ends = DiffEnds { a: "HEAD~1".into(), b: "HEAD".into() };
+        let files = diff_files(&git, &ends).unwrap();
+        let png_file = files.iter().find(|f| f.path == "a.png").unwrap();
+        assert!(png_file.binary);
+        assert_eq!((png_file.old_size, png_file.new_size), (Some(19), Some(21)));
+        let txt = files.iter().find(|f| f.path == "t.txt").unwrap();
+        assert_eq!((txt.old_size, txt.new_size), (None, None));
+        let new = image(&git, &ends, &files, "a.png", "new").unwrap();
+        assert_eq!(new, format!("data:image/png;base64,{}", base64(&png(b"three"))));
+        assert!(image(&git, &ends, &files, "a.png", "old").unwrap().ends_with(&base64(&png(b"one"))));
+        assert_eq!(image(&git, &ends, &files, "t.txt", "new"), None);
     }
 
     #[test]

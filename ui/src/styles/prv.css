@@ -5,6 +5,11 @@
  * header, toolbar, diff table, comments and panels. Colors are @primer/primitives tokens.
  */
 
+/* github.com's base rule (Primer CSS; Primer React's BaseStyles has the same), which Primer components
+   are laid out for: an ActionList item is `width: 100%` plus its padding. */
+* {
+  box-sizing: border-box;
+}
 html {
   color-scheme: light dark;
 }
@@ -89,6 +94,12 @@ h3 {
   color: var(--fgColor-default) !important;
 }
 .Link--primary:hover {
+  color: var(--fgColor-accent) !important;
+}
+.Link--secondary {
+  color: var(--fgColor-muted) !important;
+}
+.Link--secondary:hover {
   color: var(--fgColor-accent) !important;
 }
 .anim-rotate {
@@ -208,11 +219,11 @@ h3 {
     padding-right: 32px;
   }
 }
-/* Conversation and Commits: github.com's container-xl (1280px including its padding). */
-.App-main--centered {
-  max-width: 1280px;
-  margin: 0 auto;
-  box-sizing: border-box;
+/* Conversation and Commits: as wide as github.com's container-xl (1280px with its 32px padding), but
+   from the same left edge as the other tabs, so the title and the tabs stay put when switching
+   (github.com centers these two pages). */
+.PullPage-content--narrow {
+  max-width: 1216px;
 }
 
 /* ---------- Pull request header (Primer PageHeader) ---------- */
@@ -251,12 +262,6 @@ h3 {
   flex: 1;
   gap: 8px;
   align-items: center;
-}
-.PullHeader .PullHeader-actions {
-  margin-top: 8px;
-}
-.PullHeader-mergeStatus.status-success [data-component='leadingVisual'] {
-  color: var(--fgColor-success);
 }
 .PullHeader .PullHeader-description {
   padding-top: 8px;
@@ -594,6 +599,12 @@ h3 {
   font-weight: 600;
   color: var(--fgColor-muted);
 }
+/* github.com: a binary file's change in size (code.px-2, green or red). */
+.DiffFileHeader-size {
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
 .DiffFileHeader-actions {
   display: flex;
   align-items: center;
@@ -624,6 +635,261 @@ h3 {
 .DiffPlaceholder-note {
   margin-top: 4px;
   font-size: 12px;
+}
+
+/* ---------- Find in the diff (Cmd/Ctrl+F; a browser's find bar, in Primer's overlay style) ---------- */
+.FindBar {
+  position: fixed;
+  top: 8px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  background-color: var(--overlay-bgColor, var(--bgColor-default));
+  border: var(--borderWidth-thin) solid var(--borderColor-default);
+  border-radius: var(--borderRadius-large);
+  box-shadow: var(--shadow-floating-large);
+}
+.FindBar .FindBar-input {
+  width: 260px;
+}
+.FindBar-count {
+  font-size: 12px;
+  color: var(--fgColor-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* A browser's colors: every match yellow, the current one orange. */
+::highlight(prv-find) {
+  color: #1f2328;
+  background-color: #ffff00;
+}
+::highlight(prv-find-current) {
+  color: #1f2328;
+  background-color: #ff9632;
+}
+
+/* ---------- Image files (github.com's image view, measured) ---------- */
+.ImageDiff {
+  min-height: 60px;
+  padding: 30px;
+  font-size: 12px;
+  text-align: center;
+  background-color: var(--bgColor-muted);
+  border-radius: 0 0 var(--borderRadius-medium) var(--borderRadius-medium);
+}
+.ImageDiff--loading {
+  color: var(--fgColor-muted);
+}
+.ImageDiff img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  background-color: var(--bgColor-muted);
+  border: var(--borderWidth-thin) solid var(--borderColor-muted);
+}
+/* An added or deleted image, alone. */
+.ImageDiff-single {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  background-color: var(--bgColor-default);
+  border: var(--borderWidth-thin) solid var(--borderColor-muted);
+}
+/* A changed image: the view, then the bar that switches views. */
+.ImageDiff--modes {
+  padding: 0;
+}
+.ImageDiff-frame {
+  display: inline-block;
+  max-width: 100%;
+  border: var(--borderWidth-thin) solid;
+}
+.ImageDiff-frame--deleted {
+  border-color: var(--borderColor-danger-emphasis);
+}
+.ImageDiff-frame--added {
+  border-color: var(--borderColor-success-emphasis);
+}
+/* 2-up: two columns of at most 418px, 4px apart; labels above, sizes below; the smaller image is
+   centered against the taller one. */
+.ImageDiff-twoUp {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 418px));
+  justify-content: center;
+  align-items: center;
+  justify-items: center;
+  column-gap: 4px;
+  row-gap: 8px;
+  padding: 8px 30px 10px;
+}
+.ImageDiff-label {
+  font-weight: 700;
+  line-height: 14px;
+}
+.ImageDiff-label--deleted {
+  color: var(--fgColor-danger);
+}
+.ImageDiff-label--added {
+  color: var(--fgColor-success);
+}
+.ImageDiff-meta {
+  margin: -8px 0 0;
+  padding: 5px 0;
+  line-height: 14px;
+  color: var(--fgColor-muted);
+}
+/* Swipe and Onion Skin: the images stacked, on one scale. */
+.ImageDiff-view {
+  padding: 30px 30px 24px;
+}
+.ImageDiff-stack {
+  position: relative;
+  margin: 0 auto;
+}
+.ImageDiff-stack .ImageDiff-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+/* Sized by the script (one scale for both), so the swipe's narrowing shell does not squeeze them. */
+.ImageDiff-stack img {
+  max-width: none;
+}
+.ImageDiff-swipe {
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+.ImageDiff-swipeShell {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+.ImageDiff-swipeShell .ImageDiff-frame {
+  right: 0;
+  left: auto;
+}
+.ImageDiff-swipeBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+.ImageDiff-swipeBar:focus-visible {
+  outline: 2px solid var(--focus-outlineColor);
+}
+.ImageDiff-handle {
+  position: absolute;
+  left: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  background-color: var(--fgColor-muted);
+  border-radius: 50%;
+}
+.ImageDiff-handle::after {
+  width: 7px;
+  height: 7px;
+  content: '';
+  background-color: var(--bgColor-default);
+  border-radius: 50%;
+}
+.ImageDiff-handle--top {
+  top: -14px;
+}
+.ImageDiff-handle--bottom {
+  bottom: -16px;
+}
+.ImageDiff-onion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 10px;
+  margin-top: 13px;
+}
+.ImageDiff-transparent,
+.ImageDiff-opaque {
+  width: 10px;
+  height: 10px;
+}
+.ImageDiff-transparent {
+  border: var(--borderWidth-thin) solid var(--borderColor-default);
+}
+.ImageDiff-opaque {
+  background-color: var(--fgColor-muted);
+}
+.ImageDiff-onion input[type='range'] {
+  width: 272px;
+  height: 12px;
+  margin: 0 8px;
+  background: transparent;
+  appearance: none;
+}
+.ImageDiff-onion input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  background-color: var(--borderColor-default);
+}
+.ImageDiff-onion input[type='range']::-moz-range-track {
+  height: 2px;
+  background-color: var(--borderColor-default);
+}
+.ImageDiff-onion input[type='range']::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  background-color: var(--fgColor-muted);
+  border: 0;
+  border-radius: 50%;
+  appearance: none;
+}
+.ImageDiff-onion input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background-color: var(--fgColor-muted);
+  border: 0;
+  border-radius: 50%;
+}
+.ImageDiff-modes {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  background-color: var(--bgColor-muted);
+  border-top: var(--borderWidth-thin) solid var(--borderColor-default);
+  border-radius: 0 0 var(--borderRadius-medium) var(--borderRadius-medium);
+}
+.ImageDiff-mode {
+  position: relative;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 14px;
+  color: var(--fgColor-default);
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.ImageDiff-mode + .ImageDiff-mode {
+  border-left: var(--borderWidth-thin) solid var(--borderColor-default);
+}
+.ImageDiff-mode[aria-checked='true'] {
+  font-weight: 700;
+}
+/* The pointer above the current view, on the bar's top edge. */
+.ImageDiff-mode[aria-checked='true']::before {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  margin-left: -4px;
+  content: '';
+  border: 4px solid transparent;
+  border-top-color: var(--fgColor-default);
 }
 
 /* ---------- Diff table ---------- */
@@ -849,11 +1115,10 @@ h3 {
   padding: 8px;
   border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
 }
-/* The bordered boxes: comment form, review thread, comment editor, conversation comment. */
+/* The bordered boxes: comment form, review thread, comment editor. */
 .InlineComment,
 .ReviewThread,
-.MarkdownEditor-box,
-.TimelineComment-box {
+.MarkdownEditor-box {
   background-color: var(--bgColor-default);
   border: var(--borderWidth-thin) solid var(--borderColor-default);
   border-radius: var(--borderRadius-medium);
@@ -1161,8 +1426,18 @@ h3 {
   box-sizing: border-box;
   border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
 }
-.SidePanel-switch {
+/* Where github.com has its panel switcher (an invisible button), a title: Comments is the only panel. */
+.SidePanel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 14px;
   font-weight: 600;
+}
+.SidePanel-title svg {
+  color: var(--fgColor-muted);
 }
 .SidePanel-headerActions {
   display: flex;
@@ -1171,11 +1446,6 @@ h3 {
 .SidePanel-body {
   flex: 1;
   overflow: auto;
-}
-.OverviewPanel-body,
-.OverviewPanel-empty,
-.OverviewPanel-edit {
-  padding: 16px;
 }
 .CommentsPanel-filters {
   display: flex;
@@ -1241,70 +1511,6 @@ h3 {
   border: var(--borderWidth-thin) solid var(--borderColor-attention-emphasis);
   border-radius: 2em;
 }
-.MergePanel-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 16px;
-  box-sizing: border-box;
-  text-align: left;
-  color: inherit;
-  background: none;
-  border: 0;
-  border-bottom: var(--borderWidth-thin) solid var(--borderColor-default);
-}
-.MergePanel-row--link {
-  cursor: pointer;
-  background-color: var(--bgColor-muted);
-}
-.MergePanel-row--actions {
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
-.MergePanel-icon {
-  display: flex;
-  flex-shrink: 0;
-}
-.MergePanel-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-.MergePanel-title {
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 24px;
-}
-.MergePanel-sub {
-  color: var(--fgColor-muted);
-  overflow-wrap: anywhere;
-}
-.MergePanel-chevron {
-  color: var(--fgColor-muted);
-}
-.MergePanel-actions {
-  padding: 16px;
-}
-.MergePanel-note {
-  margin: 12px 0 0;
-  font-size: 12px;
-  color: var(--fgColor-muted);
-}
-.MergePanel-checks {
-  margin: 0;
-  padding: 8px 16px 16px;
-  list-style: none;
-  border-top: var(--borderWidth-thin) solid var(--borderColor-default);
-}
-.MergePanel-checks li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-
 /* ---------- Conversation ---------- */
 .PullPage-content {
   padding-top: 24px;
@@ -1316,37 +1522,6 @@ h3 {
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 24px;
   align-items: start;
-}
-.TimelineComment {
-  position: relative;
-  margin-left: 56px;
-}
-.TimelineComment-avatar {
-  position: absolute;
-  top: 0;
-  left: -56px;
-}
-.TimelineComment-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 38px;
-  padding: 0 8px 0 16px;
-  color: var(--fgColor-muted);
-  background-color: var(--bgColor-accent-muted);
-  border-bottom: var(--borderWidth-thin) solid var(--borderColor-accent-muted);
-  border-radius: var(--borderRadius-medium) var(--borderRadius-medium) 0 0;
-}
-.TimelineComment-header strong {
-  color: var(--fgColor-default);
-}
-.TimelineComment-headerActions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.TimelineComment-body {
-  padding: 16px;
 }
 .TimelineItem {
   position: relative;
@@ -1461,6 +1636,10 @@ h3 {
   font-size: 12px;
   line-height: 18px;
   color: var(--fgColor-muted);
+}
+/* github.com (link underlines on, its default): the message and the SHA link to the commit's changes. */
+.TimelineItem-commit .Link--secondary {
+  text-decoration: underline;
 }
 .MergeBox {
   position: relative;
@@ -1613,6 +1792,10 @@ h3 {
   font-weight: 500;
   overflow-wrap: anywhere;
 }
+/* github.com: the title links to Files changed for the commit. */
+a.CommitRow-title {
+  color: var(--fgColor-default);
+}
 /* github.com: an invisible small icon button right after the title text. */
 .CommitRow-titleLine .CommitRow-ellipsis {
   display: inline-grid;
@@ -1652,6 +1835,10 @@ h3 {
 .CommitRow-sha {
   font-size: 12px;
   color: var(--fgColor-muted);
+}
+/* github.com: an invisible small button with the SHA in monospace, linking to the commit's changes. */
+a.CommitRow-sha {
+  font-family: var(--fontStack-monospace);
 }
 
 /* ---------- Checks ---------- */
@@ -1967,30 +2154,6 @@ a.BlockedImage:hover {
 .PullHeader {
   container-type: inline-size;
 }
-.PullHeader-mergeShort {
-  display: none;
-}
-@container (width <= 1011px) {
-  .PullHeader [data-component='TitleArea'] {
-    grid-area: 2 / 1 / auto / -1;
-    min-width: 0;
-  }
-  .PullHeader .PullHeader-actions {
-    grid-area: 1 / 1 / auto / -1;
-    justify-content: flex-start;
-    margin-top: 0;
-    margin-bottom: 16px;
-    padding-left: 0;
-  }
-}
-@container (width < 768px) {
-  .PullHeader-mergeLong {
-    display: none;
-  }
-  .PullHeader-mergeShort {
-    display: inline;
-  }
-}
 @container (width <= 768px) {
   .TabNav-extra {
     display: none;
@@ -2043,8 +2206,7 @@ a.BlockedImage:hover {
   overflow: visible;
 }
 
-/* Conversation and Commits: shown only in narrow windows (below). */
-.TimelineComment-headerAvatar,
+/* Commits: shown only in narrow windows (below). */
 .CommitRow-menu {
   display: none;
 }
@@ -2102,23 +2264,15 @@ a.BlockedImage:hover {
     flex: 1;
     max-height: none;
   }
-  /* Conversation: the sidebar goes below the timeline. The avatar column goes; the author's avatar
-     moves into the comment header. */
+  /* Conversation: the sidebar goes below the timeline, and the avatar column goes. */
   .Conversation {
     grid-template-columns: minmax(0, 1fr);
   }
-  .TimelineComment,
   .TimelineItem {
     margin-left: 0;
   }
-  .TimelineComment-avatar,
   .MergeBox-icon {
     display: none;
-  }
-  .TimelineComment-headerAvatar {
-    display: inline-flex;
-    margin-right: 8px;
-    vertical-align: middle;
   }
 }
 /* Checks: the list goes above the log. */

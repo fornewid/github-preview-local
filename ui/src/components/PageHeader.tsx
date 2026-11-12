@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import {
   AlertIcon,
-  CheckCircleIcon,
   ChecklistIcon,
   CommentDiscussionIcon,
   DotFillIcon,
@@ -10,9 +9,7 @@ import {
   GitMergeIcon,
   PencilIcon,
   RepoIcon,
-  XCircleIcon,
   CheckIcon,
-  CircleIcon,
   XIcon,
   type Icon,
 } from '@primer/octicons-react'
@@ -22,7 +19,6 @@ import { useShallow } from 'zustand/react/shallow'
 import { useStore, type Tab } from '../store'
 import { CopyButton, DiffSquares } from './common'
 import { plural } from '../diff/util'
-import { useVisiblePanel } from '../layout'
 import type { ExistingPr } from '../types'
 
 /** Repository context bar (GitHub's global header without the site navigation). */
@@ -87,21 +83,6 @@ export function useChecksSummary(): ChecksSummary {
   return { ...counts, status }
 }
 
-export function ChecksStatusIcon({ status, size = 16 }: { status: ChecksSummary['status']; size?: number }) {
-  switch (status) {
-    case 'success':
-      return <CheckCircleIcon size={size} fill="var(--fgColor-success)" />
-    case 'failure':
-      return <XCircleIcon size={size} fill="var(--fgColor-danger)" />
-    case 'pending':
-      return <DotFillIcon size={size} fill="var(--fgColor-attention)" />
-    case 'idle':
-      return <CircleIcon size={size} fill="var(--fgColor-muted)" />
-    default:
-      return <GitMergeIcon size={size} fill="var(--fgColor-muted)" />
-  }
-}
-
 /** github.com's 32px status circle: the checks page header and the merge box sections. */
 export function StatusBadge({ tone, icon: Glyph }: { tone: 'success' | 'danger' | 'attention' | 'neutral'; icon: Icon }) {
   return (
@@ -149,26 +130,19 @@ export function publishBlocked(error: string) {
   return `Publishing is blocked: ${error.split('\n')[0]}`
 }
 
-/** Title, merge-status action, state line and tabs (Primer PageHeader, as on github.com). */
+/**
+ * Title, state line and tabs (Primer PageHeader, as on github.com; its *Merge status* action is left
+ * out, see docs/reference.md).
+ */
 export function PullHeader() {
   const s = useStore((st) => st.snapshot)!
   const prTitle = useStore((st) => st.prTitle)
   const setPr = useStore((st) => st.setPr)
-  const panel = useVisiblePanel()
-  const setPanel = useStore((st) => st.setPanel)
-  const tab = useStore((st) => st.tab)
-  const setTab = useStore((st) => st.setTab)
-  const checks = useChecksSummary()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(prTitle)
   const save = () => {
     setPr(draft.trim() || s.title, null)
     setEditing(false)
-  }
-  const mergeOpen = tab === 'files' && panel === 'merge'
-  const openMerge = () => {
-    if (tab !== 'files') setTab('files')
-    setPanel(mergeOpen ? null : 'merge')
   }
   return (
     <PageHeader role="banner" aria-label="Pull request header" className="PullHeader">
@@ -208,17 +182,6 @@ export function PullHeader() {
           </div>
         )}
       </PageHeader.TitleArea>
-      <PageHeader.Actions className="PullHeader-actions">
-        <Button
-          className={`PullHeader-mergeStatus status-${checks.status}`}
-          leadingVisual={() => <ChecksStatusIcon status={checks.status} />}
-          aria-expanded={mergeOpen}
-          onClick={openMerge}
-        >
-          <span className="PullHeader-mergeLong">Merge status</span>
-          <span className="PullHeader-mergeShort">Status</span>
-        </Button>
-      </PageHeader.Actions>
       <PageHeader.Description className="PullHeader-description">
         <div className="PullHeader-meta">
           <StateLabel status="pullOpened" className="PullHeader-state">

@@ -25,7 +25,7 @@ cd tools/reference
 PR=https://github.com/webtoon/ReadMoreTextView/pull/127     # any PR you can read
 node snapshot.mjs  $PR ../../.ref/gh          # pages, full screenshots, structure + styles JSON
 node states.mjs    $PR ../../.ref/gh-states   # menus, submenus, dialogs, panels, hover, inline comment form,
-                                              # tree filter, merge panel, expanded hunk
+                                              # tree filter, merge panel (not reproduced), expanded hunk
 node dump.mjs "$PR/changes" '.DiffFileHeader, [class*="diff-file-header"]'   # exact values of one area
 ```
 

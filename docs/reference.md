@@ -23,20 +23,22 @@ page, so the reference is captured with a signed-in Chrome profile (see
 | Element | Value |
 |---|---|
 | Page padding | 32px (≥1012px), 24px (≥768px), 16px |
-| PR header | Primer `PageHeader`: title 32px/40px weight 400, number weight 300 muted, edit `IconButton` 32px; actions (*Merge status*) margin-top 8px; description padding-top 8px (`StateLabel` 32px tall, summary muted, `BranchName` accent); navigation padding-top 16px |
+| PR header | Primer `PageHeader`: title 32px/40px weight 400, number weight 300 muted, edit `IconButton` 32px (no actions: *Merge status* is left out); description padding-top 8px (`StateLabel` 32px tall, summary muted, `BranchName` accent); navigation padding-top 16px |
 | Tabs | 14px / 22.96px, padding 8px 12px, selected: `--bgColor-default`, 1px border, radius 6px 6px 0 0; `CounterLabel` margin-left 8px; diffstat right, padding-top 12px |
-| Conversation / Commits | centered `container-xl` (1280px including 32px padding); conversation sidebar 320px (256px under 1012px) |
+| Conversation / Commits | content as wide as `container-xl` (1216px inside its 32px padding) but left-aligned like the other tabs, so the header and tabs do not move between tabs (github.com centers it); conversation sidebar 320px (256px under 1012px) |
 | Checks | check list a third of the width, details beside it |
-| Side panel (Overview, Comments, Merge status) | `PageLayout.Sidebar`, resizable (*Draggable pane splitter*: drag, arrow keys 3px, double-click resets): `clamp(450px, width, min(768px, max(450px, 100vw − d)))` with width 544px by default, d = 959px from 1280px, else 511px; plus 1px border, 1px divider, 1px → 484px at 1440, 547px from 1503px, 453px at 1280–1409. Like Primer, every window resize lowers the current width to the new maximum and widening does not raise it again (until a reload, drag or double-click). Sticky top 0, full height; header 49px (padding 8px). The page header runs up to it, the toolbar and diffs stop 16px before it |
+| Side panel (Comments; github.com also has Overview and Merge status) | `PageLayout.Sidebar`, resizable (*Draggable pane splitter*: drag, arrow keys 3px, double-click resets): `clamp(450px, width, min(768px, max(450px, 100vw − d)))` with width 544px by default, d = 959px from 1280px, else 511px; plus 1px border, 1px divider, 1px → 484px at 1440, 547px from 1503px, 453px at 1280–1409. Like Primer, every window resize lowers the current width to the new maximum and widening does not raise it again (until a reload, drag or double-click). Sticky top 0, full height; header 49px (padding 8px). The page header runs up to it, the toolbar and diffs stop 16px before it |
 
 ## Files changed
 
 | Element | Value |
 |---|---|
-| Toolbar | sticky top 0, height 60px, padding 16px 0, gap 8px, border-bottom 1px; small (28px) buttons: tree toggle, *All commits*, viewed progress (12px/18px), divider 28px, *Submit review* (primary), gear, divider, overview, comments (with counter) |
+| Toolbar | sticky top 0, height 60px, padding 16px 0, gap 8px, border-bottom 1px; small (28px) buttons: tree toggle, *All commits*, viewed progress (12px/18px), divider 28px, *Submit review* (primary), gear, divider, comments (with counter; github.com also has overview) |
 | File tree | `PageLayout.Pane` start, 296px, resizable, sticky below the toolbar, divider 1px + 16px gap; filter `TextInput` 32px + filter `IconButton`; `TreeView` rows 32px; status icons `file-diff` (muted), `file-added` (success), `file-removed` (danger), `file-moved` |
 | Diff list | gap 16px, content padding 16px 0 40px |
 | File header | sticky top 58px, padding 6px 8px, min-height 42px, `--bgColor-muted`, radius 6px 6px 0 0; chevron, CODEOWNERS `shield-lock`, path (`code` 12px/18px, truncated at the start), copy, expand all; right: `+N -N` (12px semibold) + five 8px squares, *Viewed* button, comment, kebab |
+| Binary file header | instead of the line counts, the change in size: `code` 12px/18px, padding 0 8px, `--fgColor-success` (or `--fgColor-danger` when smaller); 3 significant digits in steps of 1024 (`87.8 KB`, `-78 Bytes`, `-1.58 KB`) |
+| Image file | github.com's image view (an iframe there): `--bgColor-muted`, padding 30px. Added or deleted: the image alone in a 1px `--borderColor-muted` box. Changed: *2-up* — two columns of at most 418px, 4px apart, *Deleted* / *Added* (12px bold, danger / success) 8px above 1px frames (`--borderColor-danger-emphasis` / `--borderColor-success-emphasis`), the smaller image centered, `W: 1594px \| H: 744px` (12px muted, labels bold) below; *Swipe* — both on one scale (at most 846px), the added image right of a handle (17px `--fgColor-muted` circles 14px above and 16px below); *Onion Skin* — the added image over the deleted one, opacity from a 272px slider (2px track, 12px thumb) 13px below. Mode bar: 36px, `--bgColor-muted`, border-top 1px, 12px labels with 5px padding and 1px separators, the current one bold with a 4px triangle on the bar's edge |
 | Body | 1px border, radius 0 0 6px 6px; `table-layout: fixed` |
 
 ## Diff table
@@ -72,9 +74,9 @@ github.com and on a gh-prv-local export and prints them side by side; they are i
 | Window | github.com (and gh-prv-local) |
 |---|---|
 | ≥ 1076px | File tree beside the diffs (page container ≥ 1012px plus 2 × 32px padding; with the side panel docked the container has no right padding, so ≥ 1044px) |
-| < 1076px | Tree hidden; the toggle opens a *Files* `Dialog` from the left (640px; fullscreen under 768px), closed by choosing a file. Header actions (*Merge status*) move above the title (`@container (width <= 1011px)`; with the side panel open the header itself is the container) |
+| < 1076px | Tree hidden; the toggle opens a *Files* `Dialog` from the left (640px; fullscreen under 768px), closed by choosing a file. (github.com also moves its header actions, *Merge status*, above the title: `@container (width <= 1011px)`) |
 | < 1012px | Page padding 24px; *viewed* word hidden (`0 / 2`); conversation sidebar 256px; checks title truncated at 150px. A side panel opened now is a `Dialog` from the right (640px; fullscreen under 768px) and stays a dialog if the window widens; a docked panel hides while the window is this narrow and comes back docked |
-| < 816px | Header and toolbar containers under 768px: *Merge status* → *Status*, *Submit review* → *Review*; tab diffstat hidden (container ≤ 768px) |
+| < 816px | Toolbar container under 768px: *Submit review* → *Review*; tab diffstat hidden (container ≤ 768px) |
 | ≤ 768px | Checks: list above the details |
 | < 768px | Page padding 16px; toolbar dividers hidden; file header: chevron, path, icon-only *Viewed*, kebab — comment, copy, expand-all, stats and CODEOWNERS shield move into the kebab menu (*Comment on this file*, *Copy file name*, *Expand all lines*, *Owned by …*); *Finish your review* fullscreen; conversation: no avatar column (24px avatar in the comment header), sidebar and merge box below the timeline, merge icon hidden; Primer stacks the layout content |
 | toolbar ≤ 544px (window ≤ 576px) | *All commits* moves into the toolbar's *More options* menu (*Comments*, *All commits*, *Settings* ›); settings and comments buttons follow under 544px |
@@ -96,3 +98,10 @@ media queries without a `change` event, so gh-prv-local also re-checks on `resiz
 - File menu items *View file / Edit file / Delete file*: replaced by *Open in editor* and
   *Copy file path*. The narrow commit menu has only *Copy full SHA* (no *View commit details* /
   *Browse repository at this point*).
+- The pull request description (Overview panel, first comment of Conversation) and *Merge status*
+  (header button and panel): a local review is about the changes and the comments. The description
+  is written in *Confirm*; checks are in the Checks tab and with conflicts on Conversation.
+- Conversation and Commits keep github.com's `container-xl` width but start at the same left edge
+  as Files changed, so the title and the tabs do not move between tabs (github.com centers them).
+- Find (Cmd/Ctrl + F): github.com leaves it to the browser; here the diffs are not all on the page
+  and the native window has no find bar, so gh-prv-local has its own (a browser's colors).

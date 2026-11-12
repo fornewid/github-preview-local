@@ -63,7 +63,6 @@ function features() {
   })()
   const tree = document.querySelector('[role="tree"]')
   const h1 = document.querySelector('h1')
-  const merge = btn(/^(Merge status|Status)$/)
   const review = btn(/^(Submit review|Review)$/)
   const viewed = btn(/^(Not )?Viewed$/, fileHeader)
   const progress = toolbar && [...toolbar.querySelectorAll('*')].find((e) => vis(e) && /^\d+ \/ \d+( viewed)?$/.test(e.textContent.trim()))
@@ -76,8 +75,6 @@ function features() {
   const toolbarTop = toolbar?.getBoundingClientRect().top ?? 0
   return {
     'tree beside diffs': vis(tree) && !tree.closest('[role="dialog"]'),
-    'actions above title': !!merge && !!h1 && merge.getBoundingClientRect().top < h1.getBoundingClientRect().top,
-    'merge status label': merge ? name(merge) : null,
     'tab diffstat': !!text(/^\+[\d,]+$/) && text(/^\+[\d,]+$/).getBoundingClientRect().top < toolbarTop,
     'tab icons': !!tab && vis(tab.querySelector('svg')),
     'state above summary': !!state && !!summary && summary.getBoundingClientRect().top >= state.getBoundingClientRect().bottom - 4,
@@ -99,7 +96,8 @@ function features() {
 
 async function openPanel(page) {
   if (!withPanel) return
-  await page.getByRole('button', { name: 'Open overview panel' }).first().click()
+  // The Comments panel: gh-prv-local has no Overview or Merge status panel (all three dock alike).
+  await page.getByRole('button', { name: 'Open comments panel' }).first().click()
   await page.waitForTimeout(1200)
 }
 

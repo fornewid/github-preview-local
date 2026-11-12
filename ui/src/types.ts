@@ -46,6 +46,9 @@ export interface FileDiff {
   deletionsW: number
   /** True when the patch was not loaded because it is too large. */
   tooLarge: boolean
+  /** Blob sizes in bytes of a binary file. */
+  oldSize?: number | null
+  newSize?: number | null
 }
 
 export interface ExistingPr {

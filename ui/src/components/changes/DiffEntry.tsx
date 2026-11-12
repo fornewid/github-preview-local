@@ -34,10 +34,11 @@ import {
 } from '../../diff/model'
 import type { HlLines, Run } from '../../diff/highlight'
 import type { Range } from '../../diff/word'
-import { anchorFor, codeownersFor, contentKey, isViewed, ownersLabel, tabSizeFor } from '../../diff/util'
+import { anchorFor, codeownersFor, contentKey, isImage, isViewed, ownersLabel, sizeDelta, tabSizeFor } from '../../diff/util'
 import type { FileDiff, ReviewComment, Side } from '../../types'
 import { Avatar, CopyButton, DiffSquares, Markdown, copyText } from '../common'
 import { EditForm, MarkdownEditor } from '../MarkdownEditor'
+import { ImageDiff } from './ImageDiff'
 
 const LARGE_DIFF_LINES = 1500
 
@@ -89,6 +90,15 @@ const LINE_BG: Record<LineKind, string> = {
   context: 'var(--bgColor-default)',
 }
 
+/** A binary file's change in size, where a text file has its line counts (github.com). */
+function BinarySize({ file }: { file: FileDiff }) {
+  const before = file.status === 'added' ? 0 : file.oldSize
+  const after = file.status === 'deleted' ? 0 : file.newSize
+  if (before == null || after == null) return <span className="DiffFileHeader-binary">BIN</span>
+  const delta = after - before
+  return <code className={`DiffFileHeader-size ${delta < 0 ? 'fgColor-danger' : 'fgColor-success'}`}>{sizeDelta(delta)}</code>
+}
+
 function ViewedBox({ checked }: { checked: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden className={`ViewedBox ${checked ? 'checked' : ''}`}>
@@ -101,7 +111,6 @@ function ViewedBox({ checked }: { checked: boolean }) {
 const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   const ref = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
-  const [forceLoad, setForceLoad] = useState(false)
   const settings = useStore(
     useShallow((st) => ({ hideWhitespace: st.settings.hideWhitespace, compact: st.settings.compact, diffView: st.settings.diffView })),
   )
@@ -116,8 +125,10 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   const newText = useStore((st) => st.contents[newKey])
   const hlOld = useStore((st) => st.hl[oldKey])
   const hlNew = useStore((st) => st.hl[newKey])
-  const { toggleCollapsed, toggleViewed, ensureContents, setGaps, compose } = useStore.getState()
+  const { toggleCollapsed, toggleViewed, ensureContents, setGaps, compose, loadDiff } = useStore.getState()
   const collapsed = ui?.collapsed ?? viewed
+  const forceLoad = !!ui?.load
+  const setForceLoad = () => loadDiff(file.path)
 
   useEffect(() => {
     const el = ref.current
@@ -171,10 +182,13 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
   const lineHeight = settings.compact ? 20 : 24
   if (collapsed) body = null
   else if (file.submodule) body = <Placeholder>Submodule {file.path} updated.</Placeholder>
+  else if (file.binary && isImage(file))
+    // Loaded once the file comes near the viewport, like the diffs.
+    body = visible ? <ImageDiff file={file} fallback={<Placeholder>Binary file not shown.</Placeholder>} /> : <div className="ImageDiff" />
   else if (file.binary) body = <Placeholder>Binary file not shown.</Placeholder>
   else if (file.tooLarge) body = <Placeholder>Large diffs are not rendered by default.</Placeholder>
   else if (file.generated && !forceLoad)
-    body = <LoadDiff note="Some generated files are not rendered by default." onLoad={() => setForceLoad(true)} />
+    body = <LoadDiff note="Some generated files are not rendered by default." onLoad={setForceLoad} />
   else if (!hunks.length)
     body = (
       <Placeholder>
@@ -190,7 +204,7 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
       </Placeholder>
     )
   else if (patchLines > LARGE_DIFF_LINES && !forceLoad)
-    body = <LoadDiff note="Large diffs are not rendered by default." onLoad={() => setForceLoad(true)} />
+    body = <LoadDiff note="Large diffs are not rendered by default." onLoad={setForceLoad} />
   else if (!visible) body = <div style={{ height: (patchLines + hunks.length) * lineHeight }} />
   else
     body = (
@@ -264,17 +278,17 @@ const DiffEntry = memo(function DiffEntry({ file }: { file: FileDiff }) {
           <div className="DiffFileHeader-end">
             <div className="DiffFileHeader-stat">
               {file.binary ? (
-                <span className="DiffFileHeader-binary">BIN</span>
+                <BinarySize file={file} />
               ) : (
                 <>
                   <span className="DiffStat-add">+{add}</span>
                   <span className="DiffStat-del">-{del}</span>
+                  <span className="sr-only">
+                    Lines changed: {add} additions &amp; {del} deletions
+                  </span>
+                  <DiffSquares add={add} del={del} />
                 </>
               )}
-              <span className="sr-only">
-                Lines changed: {add} additions &amp; {del} deletions
-              </span>
-              <DiffSquares add={add} del={del} />
             </div>
             <div className="DiffFileHeader-actions">
               <Button
@@ -546,6 +560,8 @@ function DiffTable(p: TableProps) {
     return (
       <td
         className={`diff-text-cell ${sideClass}`}
+        // Find in the diff (find.ts) counts the hunks' lines; revealed context is not counted.
+        data-find={no != null && !line.expanded ? `${side}:${no}` : undefined}
         data-selected={selected}
         style={{ backgroundColor: LINE_BG[kind] }}
       >

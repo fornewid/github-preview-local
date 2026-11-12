@@ -13,10 +13,9 @@ import {
   SyncIcon,
   XCircleFillIcon,
 } from '@primer/octicons-react'
-import { ActionList, ActionMenu, Button, IconButton, Label } from '@primer/react'
+import { ActionList, ActionMenu, Button, IconButton } from '@primer/react'
 import { canConfirm, useOpenPr, useStore } from '../store'
-import { Avatar, CopyButton, Markdown, copyText } from './common'
-import { EditForm } from './MarkdownEditor'
+import { Avatar, CopyButton, copyText } from './common'
 import { ChecksStatusBadge, ConflictsBadge, conflictsText, confirmLabel, useChecksSummary } from './PageHeader'
 import { commitLine } from './changes/Toolbar'
 import { commitAuthors, longDate, plural } from '../diff/util'
@@ -41,11 +40,8 @@ export function CheckStatusIcon({ status }: { status: CheckStatus }) {
 
 export function ConversationTab() {
   const s = useStore((st) => st.snapshot)!
-  const prBody = useStore((st) => st.prBody)
   const drafts = useStore((st) => st.drafts)
-  const setPr = useStore((st) => st.setPr)
   const setTab = useStore((st) => st.setTab)
-  const setPanel = useStore((st) => st.setPanel)
   const openReview = useStore((st) => st.openReview)
   const transport = useStore((st) => st.transport)
   const range = useStore((st) => st.range)
@@ -53,63 +49,9 @@ export function ConversationTab() {
   const confirmable = canConfirm({ transport, range })
   const checks = useChecksSummary()
   const conflicts = conflictsText(s.conflicts, (files) => files.slice(0, 5).join(', '))
-  const [editing, setEditing] = useState(false)
-  const [body, setBody] = useState(prBody)
   return (
     <div className="Conversation">
       <div className="Conversation-timeline">
-        <div className="TimelineComment">
-          <span className="TimelineComment-avatar">
-            <Avatar name={s.author} size={40} />
-          </span>
-          <div className="TimelineComment-box">
-            <div className="TimelineComment-header">
-              <span className="TimelineComment-author">
-                <span className="TimelineComment-headerAvatar">
-                  <Avatar name={s.author} size={24} />
-                </span>
-                <strong>{s.author}</strong> commented
-              </span>
-              <span className="TimelineComment-headerActions">
-                <Label variant="secondary">Author</Label>
-                {!editing && (
-                  <Button
-                    size="small"
-                    variant="invisible"
-                    onClick={() => {
-                      setBody(prBody)
-                      setEditing(true)
-                    }}
-                  >
-                    Edit
-                  </Button>
-                )}
-              </span>
-            </div>
-            <div className="TimelineComment-body">
-              {editing ? (
-                <EditForm
-                  value={body}
-                  onChange={setBody}
-                  rows={10}
-                  label="Pull request description"
-                  saveLabel="Update comment"
-                  onCancel={() => setEditing(false)}
-                  onSave={() => {
-                    setPr(null, body)
-                    setEditing(false)
-                  }}
-                />
-              ) : prBody.trim() ? (
-                <Markdown source={prBody} />
-              ) : (
-                <span className="fgColor-muted">
-                  <em>No description provided.</em>
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
         <div className="TimelineItem">
           <div className="TimelineItem-badge">
             <GitCommitIcon size={16} />
@@ -174,7 +116,6 @@ export function ConversationTab() {
                 disabled={!confirmable}
                 onClick={() => {
                   setTab('files')
-                  setPanel('merge')
                   openReview('CONFIRM')
                 }}
               >
@@ -223,9 +164,27 @@ function CommitAvatars({ c }: { c: Commit }) {
   )
 }
 
+/**
+ * Opens Files changed for one commit, as github.com's commit links do; null in an export, which has
+ * only the diff of all commits.
+ */
+function useCommitLink(sha: string) {
+  const native = useStore((st) => st.transport?.kind === 'native')
+  const openCommit = useStore((st) => st.openCommit)
+  if (!native) return null
+  return {
+    href: '#files',
+    onClick: (e: React.MouseEvent) => {
+      e.preventDefault()
+      openCommit(sha)
+    },
+  }
+}
+
 /** A commit in the conversation timeline: github.com shows the message as muted code. */
 function TimelineCommit({ c }: { c: Commit }) {
   const [open, setOpen] = useState(false)
+  const link = useCommitLink(c.sha)
   return (
     <div className="TimelineItem TimelineItem--condensed">
       <div className="TimelineItem-badge">
@@ -235,14 +194,30 @@ function TimelineCommit({ c }: { c: Commit }) {
         <div className="TimelineItem-commitLine">
           <CommitAvatars c={c} />
           <span className="TimelineItem-commitMessage">
-            <code className="TimelineItem-commitTitle">{c.subject}</code>
+            <code className="TimelineItem-commitTitle">
+              {link ? (
+                <a {...link} className="Link--secondary">
+                  {c.subject}
+                </a>
+              ) : (
+                c.subject
+              )}
+            </code>
             {c.body && (
               <button type="button" className="TimelineItem-expander" aria-expanded={open} aria-label="Show description" onClick={() => setOpen(!open)}>
                 …
               </button>
             )}
           </span>
-          <code className="TimelineItem-sha">{c.short}</code>
+          <code className="TimelineItem-sha">
+            {link ? (
+              <a {...link} className="Link--secondary">
+                {c.short}
+              </a>
+            ) : (
+              c.short
+            )}
+          </code>
         </div>
         {open && <pre className="TimelineItem-commitBody">{c.body}</pre>}
       </div>
@@ -252,11 +227,18 @@ function TimelineCommit({ c }: { c: Commit }) {
 
 function CommitRow({ c }: { c: Commit }) {
   const [open, setOpen] = useState(false)
+  const link = useCommitLink(c.sha)
   return (
     <li className="CommitRow">
       <div className="CommitRow-main">
         <div className="CommitRow-titleLine">
-          <span className="CommitRow-title">{c.subject}</span>
+          {link ? (
+            <a {...link} className="CommitRow-title">
+              {c.subject}
+            </a>
+          ) : (
+            <span className="CommitRow-title">{c.subject}</span>
+          )}
           {c.body && (
             <IconButton
               size="small"
@@ -276,7 +258,13 @@ function CommitRow({ c }: { c: Commit }) {
         {open && <pre className="CommitRow-body">{c.body}</pre>}
       </div>
       <div className="CommitRow-actions">
-        <code className="CommitRow-sha">{c.short}</code>
+        {link ? (
+          <Button as="a" {...link} size="small" variant="invisible" className="CommitRow-sha">
+            {c.short}
+          </Button>
+        ) : (
+          <code className="CommitRow-sha">{c.short}</code>
+        )}
         <CopyButton text={c.sha} label="Copy full SHA" />
       </div>
       {/* Under 544px github.com folds the SHA and its buttons into a menu. */}

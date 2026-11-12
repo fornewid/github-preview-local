@@ -1,9 +1,10 @@
 // End-to-end checks of the review UI on a gh-prv-local export (static transport), with the local Chrome:
 // comments (line, file, edit), settings (layout, whitespace, line height, minimize), expanders,
-// viewed, panels, commit picker, file tree filter, review submission, and the layout from 320px
-// to 2560px (file tree and side panel dialogs, side panel width, overflow menu, compact headers).
+// viewed, the comments panel, commit picker and commit links, find (Cmd/Ctrl+F), image files,
+// file tree filter, review submission, and the layout from 320px to 2560px (file tree and side
+// panel dialogs, side panel width, overflow menu, compact headers, tabs that keep the header still).
 //
-//   node ui-test.mjs <preview.html>
+//   node ui-test.mjs <preview.html> [<export with image files>]
 import { fileURLToPath } from 'node:url'
 import { exportUrl, openChrome, openExport } from './common.mjs'
 
@@ -142,12 +143,61 @@ await check('viewed collapses the file and updates progress', async () => {
   assert(await first().locator('.DiffEntry-body').count() === 1, 'expanded again')
 })
 
-await check('overview panel shows the description', async () => {
-  await page.getByRole('button', { name: 'Open overview panel' }).click()
+await check('no description or merge status: the header has no actions, the panel is Comments', async () => {
+  assert((await page.getByRole('button', { name: /Merge status|overview panel/ }).count()) === 0, 'no merge status or overview buttons')
+  await page.evaluate(() => window.__prv.getState().setTab('conversation'))
   await settle()
-  assert(await page.locator('.SidePanel').isVisible(), 'panel open')
-  await page.getByRole('button', { name: 'Close overview panel' }).first().click()
+  assert((await page.locator('.Conversation .TimelineComment, .Conversation .markdown-body').count()) === 0, 'no description in Conversation')
+  await page.evaluate(() => window.__prv.getState().setTab('files'))
+  await settle()
 })
+
+await check('settings menu fits its content (no scrollbar inside it)', async () => {
+  await page.getByRole('button', { name: 'Open diff view settings' }).click()
+  await settle()
+  const fit = await page.evaluate(() => {
+    const o = document.querySelector('[role="menu"]').closest('[class*="Overlay"]')
+    return [o.scrollWidth, o.clientWidth, getComputedStyle(document.querySelector('[role="menu"] li')).boxSizing]
+  })
+  assert(fit[0] <= fit[1] && fit[2] === 'border-box', `menu ${fit.join(' ')}`)
+  await page.keyboard.press('Escape')
+  await settle(300)
+})
+
+await check('find (Cmd/Ctrl+F): counts every match, paints the ones on screen, goes to the next, Escape closes', async () => {
+  const word = await page
+    .locator('.DiffEntry td[data-find] .diff-text-inner')
+    .evaluateAll((cells) => cells.map((c) => c.textContent.match(/[A-Za-z_]{3,}/)?.[0]).find(Boolean))
+  assert(word, 'a word to look for')
+  try {
+    await find(word)
+  } finally {
+    if (await page.locator('.FindBar').count()) await page.getByRole('button', { name: 'Close find' }).click()
+  }
+})
+async function find(word) {
+  await page.keyboard.press('ControlOrMeta+f')
+  await settle(200)
+  assert(await page.getByRole('textbox', { name: 'Find in changes' }).evaluate((e) => e === document.activeElement), 'focus in the find bar')
+  await page.keyboard.type(word)
+  await settle(600)
+  const count = async () => (await page.locator('.FindBar-count').textContent()).split('/').map(Number)
+  const [at, total] = await count()
+  assert(at === 1 && total > 0, `count ${at}/${total}`)
+  const painted = () => page.evaluate(() => [CSS.highlights.get('prv-find')?.size ?? 0, CSS.highlights.get('prv-find-current')?.size ?? 0])
+  let [all, cur] = await painted()
+  assert(all > 0 && cur === 1, `painted ${all}, current ${cur}`)
+  await page.keyboard.press('Enter')
+  await settle(500)
+  assert((await count())[0] === (total > 1 ? 2 : 1), 'Enter goes to the next match')
+  await page.keyboard.press('Shift+Enter')
+  await settle(500)
+  assert((await count())[0] === 1, 'Shift+Enter goes back')
+  await page.keyboard.press('Escape')
+  await settle(300)
+  ;[all, cur] = await painted()
+  assert((await page.locator('.FindBar').count()) === 0 && all === 0 && cur === 0, 'closed and cleared')
+}
 
 await check('markdown: github.com allowlist, remote images become links, nothing loads', async () => {
   const body = [
@@ -160,13 +210,15 @@ await check('markdown: github.com allowlist, remote images become links, nothing
     '- [ ] loose one\n\n- [x] loose two',
     '- [x] done',
   ].join('\n\n')
-  await page.evaluate((b) => {
-    window.__prv.getState().setPr(undefined, b)
-    window.__prv.getState().setTab('conversation')
+  // A comment on the first file renders it (the same sanitizer as every comment).
+  const id = await page.evaluate((b) => {
+    const st = window.__prv.getState()
+    st.addComment({ path: st.snapshot.files[0].path, side: 'RIGHT', line: 0, body: b })
+    return window.__prv.getState().drafts.at(-1).id
   }, body)
   await settle(800)
   try {
-    const md = page.locator('.TimelineComment .markdown-body').first()
+    const md = first().locator('.markdown-body').filter({ hasText: 'fake label' }).first()
     const r = await md.evaluate((el) => ({
       imgs: el.querySelectorAll('img, video, svg, image, source').length,
       blocked: [...el.querySelectorAll('.BlockedImage')].map((b) => `${b.tagName}:${b.getAttribute('href') ?? ''}:${b.textContent}`),
@@ -187,8 +239,8 @@ await check('markdown: github.com allowlist, remote images become links, nothing
     assert(r.bullets === 0, `task list items with a bullet: ${r.bullets}`)
     assert(r.role === 'menu' && !r.js && r.checkbox === true, JSON.stringify(r))
   } finally {
-    await page.evaluate(() => window.__prv.getState().setTab('files'))
-    await settle(600)
+    await page.evaluate((id) => window.__prv.getState().deleteComment(id), id)
+    await settle(400)
   }
 })
 
@@ -217,10 +269,12 @@ await check('CODEOWNERS shield label', async () => {
 })
 
 await check('Confirm is disabled without publishing (static export)', async () => {
-  await page.getByRole('button', { name: 'Merge status' }).click()
+  await page.evaluate(() => window.__prv.getState().setTab('conversation'))
   await settle()
-  assert(await page.locator('.MergePanel').getByRole('button', { name: /Confirm/ }).isDisabled(), 'merge panel confirm disabled')
-  await page.getByRole('button', { name: 'Close merge status panel' }).first().click()
+  assert(await page.locator('.MergeBox').getByRole('button', { name: /Confirm/ }).isDisabled(), 'merge box confirm disabled')
+  assert((await page.locator('.CommitRow-title, .TimelineItem-commitTitle a').count()) === 0, 'no commit links without the native window')
+  await page.evaluate(() => window.__prv.getState().setTab('files'))
+  await settle()
 })
 
 await check('review draft survives closing the overlay', async () => {
@@ -299,7 +353,7 @@ await check('under 1076px the file tree opens as a "Files" dialog and closes on 
 
 await check('side panel: docked width follows the window, a dialog under 1012px', async () => {
   const open = async () => {
-    await page.getByRole('button', { name: 'Open overview panel' }).click()
+    await page.getByRole('button', { name: 'Open comments panel' }).click()
     await settle()
   }
   // Earlier checks narrowed the window, which lowers the panel width for this page (Primer): reload.
@@ -311,7 +365,7 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
     await open()
     const got = await page.locator('.SidePanel').evaluate((e) => Math.round(e.getBoundingClientRect().width))
     assert(got === expected, `${w}px: panel ${got}px, expected ${expected}px`)
-    await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+    await page.locator('.SidePanel').getByRole('button', { name: 'Close comments panel' }).click()
     await settle(300)
   }
   // Like Primer on github.com: narrowing the window lowered the width, widening keeps it.
@@ -329,7 +383,7 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
   assert((await handle.getAttribute('aria-valuenow')) === '541', 'arrow key resizes by 3px')
   await handle.dblclick()
   await settle(300)
-  await page.locator('.SidePanel').getByRole('button', { name: 'Close overview panel' }).click()
+  await page.locator('.SidePanel').getByRole('button', { name: 'Close comments panel' }).click()
   // Docked at 1440px: hidden while the window is narrower than 1012px, docked again after; with
   // it docked the tree stays beside the diffs down to 1044px (not 1076px).
   await width(1440)
@@ -341,21 +395,14 @@ await check('side panel: docked width follows the window, a dialog under 1012px'
   await width(900)
   assert((await dialogs()) === 0 && !(await page.locator('.SidePanel').isVisible()), 'docked panel hidden at 900px')
   assert((await page.locator('.SidePanel').count()) === 1, 'still mounted while hidden (keeps an edit)')
-  assert(await page.getByRole('button', { name: 'Open overview panel' }).isVisible(), 'a hidden panel reads as closed')
+  assert(await page.getByRole('button', { name: 'Open comments panel' }).isVisible(), 'a hidden panel reads as closed')
   await width(1440)
   assert(await page.locator('.SidePanel').isVisible(), 'docked again at 1440px')
-  // Hidden, then its toggle: it opens as a dialog, and an edit in progress carries over.
-  await page.locator('.SidePanel').getByRole('button', { name: 'Edit description' }).click()
-  await page.getByRole('textbox', { name: 'Pull request description' }).fill('Draft that must survive')
+  // Hidden, then its toggle: it opens as a dialog.
   await width(900)
-  await page.getByRole('button', { name: 'Open overview panel' }).click()
+  await page.getByRole('button', { name: 'Open comments panel' }).click()
   await settle()
   assert((await dialogs()) === 1, 'opens as a dialog')
-  assert(
-    (await page.getByRole('dialog').getByRole('textbox', { name: 'Pull request description' }).inputValue()) === 'Draft that must survive',
-    'the draft carried over',
-  )
-  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
   await closeDialogs()
   await width(1440)
   assert((await page.locator('.SidePanel').count()) === 0, 'replaced by the dialog, so closed after it')
@@ -374,7 +421,6 @@ await check('labels shorten under 816px and controls move into "More options" at
   assert(await page.getByRole('button', { name: 'Submit review' }).isVisible(), 'Submit review at 816px')
   await width(815)
   assert(await page.getByRole('button', { name: 'Review', exact: true }).isVisible(), 'Review at 815px')
-  assert(await page.getByRole('button', { name: 'Status', exact: true }).isVisible(), 'Status at 815px')
   await width(375)
   const toolbar = page.locator('.ChangesToolbar')
   assert(!(await toolbar.getByRole('button', { name: 'All commits' }).isVisible()), 'All commits moved')
@@ -408,6 +454,68 @@ await check('under 768px: compact file header, its menu offers the hidden action
   assert(await page.evaluate(() => document.activeElement?.tagName === 'TEXTAREA'), 'starts in the text box')
   await page.keyboard.press('Escape')
   await settle(300)
+})
+
+await check('the title and the tabs stay put when switching tabs (1920px)', async () => {
+  await width(1920)
+  const at = []
+  for (const tab of ['files', 'conversation', 'commits', 'checks']) {
+    await page.evaluate((t) => window.__prv.getState().setTab(t), tab)
+    await settle(300)
+    at.push(await page.evaluate(() => [document.querySelector('.PullHeader-title'), document.querySelector('.TabNav-link')].map((e) => Math.round(e.getBoundingClientRect().left)).join(',')))
+  }
+  assert(new Set(at).size === 1, `positions per tab: ${at.join(' | ')}`)
+  await page.evaluate(() => window.__prv.getState().setTab('files'))
+  await width(1440)
+})
+
+await check("native views (fake bridge): a commit's title opens Files changed for that commit", async () => {
+  const native = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+  await native.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
+  const p = await native.newPage()
+  p.on('pageerror', (e) => errors.push(e.message))
+  await p.goto(exportUrl(file), { waitUntil: 'load' })
+  await p.waitForTimeout(1500)
+  await p.getByRole('link', { name: /^Commits/ }).click()
+  await p.waitForTimeout(400)
+  const title = p.locator('a.CommitRow-title').first()
+  const sha = await p.locator('a.CommitRow-sha').first().textContent()
+  await title.click()
+  await p.waitForTimeout(800)
+  const state = await p.evaluate(() => ({ tab: window.__prv.getState().tab, from: window.__prv.getState().range.from }))
+  assert(state.tab === 'files' && state.from?.startsWith(sha.trim()), `after the click: ${JSON.stringify(state)}`)
+  assert((await p.locator('.CommitPicker-button').textContent()).trim() === sha.trim(), 'the commit picker shows the commit')
+  // The conversation timeline links its commits too.
+  await p.getByRole('link', { name: /^Conversation/ }).click()
+  await p.waitForTimeout(400)
+  assert((await p.locator('.TimelineItem-commitTitle a.Link--secondary, .TimelineItem-sha a.Link--secondary').count()) >= 2, 'timeline commit links')
+  await native.close()
+})
+
+await check('image files: added or deleted alone, changed in 2-up, Swipe and Onion Skin; sizes in the header', async () => {
+  const images = process.argv[3]
+  if (!images) return // no second export given
+  const ip = await ctx.newPage()
+  await openExport(ip, images, { settings: { treeVisible: false } })
+  const changed = ip.locator('.DiffEntry', { has: ip.locator('.ImageDiff-modes') }).first()
+  await changed.scrollIntoViewIfNeeded()
+  await ip.waitForTimeout(600)
+  const loaded = (sel) => changed.locator(sel).evaluateAll((imgs) => imgs.every((i) => i.complete && i.naturalWidth > 0) && imgs.length)
+  assert((await loaded('.ImageDiff-twoUp img')) === 2, '2-up shows both images')
+  assert(/W: \d+px \| H: \d+px/.test(await changed.locator('.ImageDiff-meta').first().textContent()), 'sizes under the images')
+  await changed.getByRole('radio', { name: 'Swipe' }).click()
+  await ip.waitForTimeout(300)
+  const slider = changed.getByRole('slider')
+  await slider.focus()
+  await ip.keyboard.press('ArrowRight')
+  assert((await slider.getAttribute('aria-valuenow')) === '5', 'the swipe handle moves with the arrow keys')
+  await changed.getByRole('radio', { name: 'Onion Skin' }).click()
+  await changed.locator('input[type=range]').fill('30')
+  const opacity = await changed.locator('.ImageDiff-frame--added').evaluate((e) => getComputedStyle(e).opacity)
+  assert(opacity === '0.3', `onion skin opacity ${opacity}`)
+  const sizes = await ip.locator('.DiffFileHeader-size').allTextContents()
+  assert(sizes.length > 0 && sizes.every((t) => /^-?[\d.]+ (Bytes?|KB|MB|GB)$/.test(t)), `header sizes: ${sizes.join(', ')}`)
+  await ip.close()
 })
 
 await check('native views (fake bridge): checks list beside the log, stacked at 768px and below', async () => {

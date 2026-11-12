@@ -1,7 +1,7 @@
 //! `gh-prv-local export`: a single self-contained HTML file (UI + data). Opens from
 //! disk with `file://` — no server. Review comments can be copied for an AI agent.
 
-use crate::git::{contents, read_blobs, Git, Resolved};
+use crate::git::{contents, image, image_mime, read_blobs, Git, Resolved};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -40,7 +40,21 @@ pub fn data_json(git: &Git, r: &Resolved) -> serde_json::Value {
             map.insert(key, text);
         }
     }
-    json!({ "snapshot": s, "contents": map })
+    // Images for the image diff, as data URLs, within the same budget.
+    let mut images = BTreeMap::new();
+    for f in s.files.iter().filter(|f| f.binary && image_mime(&f.path).is_some()) {
+        let old = f.old_path.clone().unwrap_or_else(|| f.path.clone());
+        for (side, path) in [("old", old), ("new", f.path.clone())] {
+            if (side == "old" && f.status == "added") || (side == "new" && f.status == "deleted") || total > MAX_TOTAL_CONTENT {
+                continue;
+            }
+            if let Some(url) = image(git, &r.ends, &s.files, &path, side) {
+                total += url.len();
+                images.insert(format!("{side}:{path}"), url);
+            }
+        }
+    }
+    json!({ "snapshot": s, "contents": map, "images": images })
 }
 
 pub fn html(data: &serde_json::Value) -> String {

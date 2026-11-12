@@ -192,6 +192,15 @@ async fn get_contents(app: State<'_, AppState>, path: String, side: String) -> R
 }
 
 #[tauri::command]
+async fn get_image(app: State<'_, AppState>, path: String, side: String) -> Result<Option<String>, String> {
+    let Some(cur) = app.current() else { return Ok(None) };
+    let git = app.git.clone();
+    tauri::async_runtime::spawn_blocking(move || git::image(&git, &cur.ends, &cur.snapshot.files, &path, &side))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn load_state(app: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
     let Some(cur) = app.current() else { return Ok(None) };
     Ok(read_state(&app.state_dir, &cur.snapshot.head.name))
@@ -579,6 +588,7 @@ fn run_window(git: Git, opts: Options, format: Format) {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             get_contents,
+            get_image,
             load_state,
             save_state,
             list_checks,

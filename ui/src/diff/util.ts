@@ -50,6 +50,24 @@ export function sidePath(f: Pick<FileDiff, 'path' | 'oldPath'>, side: ContentSid
   return side === 'old' ? (f.oldPath ?? f.path) : f.path
 }
 
+/** Image files the diff shows as images, like github.com (same list as `image_mime` in git.rs). */
+export function isImage(f: Pick<FileDiff, 'path' | 'binary'>) {
+  return f.binary && /\.(png|jpe?g|gif|webp|bmp|ico|avif)$/i.test(f.path)
+}
+
+/** A size change as github.com writes it: 3 significant digits, 1024 steps ("-78 Bytes", "87.8 KB"). */
+export function sizeDelta(bytes: number) {
+  const units = ['Bytes', 'KB', 'MB', 'GB']
+  let n = Math.abs(bytes)
+  let u = 0
+  while (n >= 1024 && u < units.length - 1) {
+    n /= 1024
+    u++
+  }
+  const text = u === 0 ? `${n} ${n === 1 ? 'Byte' : 'Bytes'}` : `${Number(n.toPrecision(3))} ${units[u]}`
+  return `${bytes < 0 ? '-' : ''}${text}`
+}
+
 /** Key of a side's contents (`old:path`, `new:path`), in the store and in an export's data. */
 export function contentKey(f: Pick<FileDiff, 'path' | 'oldPath'>, side: ContentSide) {
   return `${side}:${sidePath(f, side)}`

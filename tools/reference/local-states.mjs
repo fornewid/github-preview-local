@@ -51,9 +51,9 @@ await step('16-comment-form', async () => {
   await cell.locator('button[aria-label="Add comment"]').click()
 })
 await page.locator('button', { hasText: /^Cancel$/ }).first().click().catch(() => {})
-await step('06-overview-panel', () => page.getByRole('button', { name: 'Open overview panel' }).click())
-await page.getByRole('button', { name: /Close overview/ }).first().click().catch(() => {})
-await step('18-merge-status', () => page.locator('button', { hasText: 'Merge status' }).first().click())
+// 06-overview-panel and 18-merge-status have no counterpart: gh-prv-local leaves both panels out.
+await step('07-comments-panel', () => page.getByRole('button', { name: 'Open comments panel' }).click())
+await page.getByRole('button', { name: /Close comments/ }).first().click().catch(() => {})
 await open('?diff=split', { treeVisible: true })
 await shot('08-file-tree')
 await step('17-tree-filter', () => page.getByRole('button', { name: 'Filter options' }).click())

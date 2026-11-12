@@ -57,6 +57,8 @@ async function basic(): Promise<Report & { ok: boolean }> {
   await settle('zoom restored', zoomed(saved), 5000)
   const highlighted = document.querySelectorAll('.pl-k, .pl-c, .pl-s, .pl-en').length
   const fonts = fontCheck()
+  const menu = await menuCheck()
+  const find = await findCheck()
   return {
     ok:
       !s.error &&
@@ -65,9 +67,13 @@ async function basic(): Promise<Report & { ok: boolean }> {
       Math.abs(zoom.zoomed - base / 1.5) < 2 &&
       (base / 1.5 >= 1076 || !zoom.treePane) &&
       Math.abs(window.innerWidth - base / saved) < 2 &&
-      fonts.ok,
+      fonts.ok &&
+      menu.ok &&
+      find.ok,
     zoom,
     fonts,
+    menu,
+    find,
     error: s.error,
     files: s.snapshot?.files.length ?? 0,
     rows: document.querySelectorAll('.DiffTable tr').length,
@@ -103,6 +109,37 @@ function fontCheck() {
     rendering: body.textRendering,
   }
   return { ...r, ok: r.native && r.code > 0 && r.code === r.chrome && r.smoothing === 'auto' && r.rendering.toLowerCase() === 'optimizespeed' }
+}
+
+/**
+ * The settings menu fits its content (WebKit showed a horizontal scrollbar in it when Primer's
+ * border-box base rule was missing).
+ */
+async function menuCheck() {
+  click($('.ChangesToolbar-settings'), 'settings')
+  await settle('settings menu', () => $('[role="menu"]'), 5000)
+  const overlay = $('[role="menu"]')?.closest<HTMLElement>('[class*="Overlay"]')
+  const r = { scrollWidth: overlay?.scrollWidth ?? 0, clientWidth: overlay?.clientWidth ?? 0 }
+  click($('.ChangesToolbar-settings'), 'settings')
+  await settle('settings menu closed', () => !$('[role="menu"]'), 3000)
+  return { ...r, ok: r.clientWidth > 0 && r.scrollWidth <= r.clientWidth }
+}
+
+/** Cmd+F finds a word of the first diff line, paints the matches and marks the current one. */
+async function findCheck() {
+  const word = ($('.DiffEntry td[data-find] .diff-text-inner')?.textContent ?? '').match(/[A-Za-z_]{3,}/)?.[0]
+  if (!word) return { ok: false, error: 'no code to search' }
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', metaKey: true, ctrlKey: true, bubbles: true }))
+  await settle('find bar', () => document.activeElement?.getAttribute('aria-label') === 'Find in changes', 3000)
+  const input = document.activeElement as HTMLInputElement
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, word)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  const highlights = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights
+  await settle('matches painted', () => (highlights?.get('prv-find')?.size ?? 0) > 0 && highlights?.get('prv-find-current')?.size === 1, 5000)
+  const r = { word, count: $('.FindBar-count')?.textContent ?? '', painted: highlights?.get('prv-find')?.size ?? 0, current: highlights?.get('prv-find-current')?.size ?? 0 }
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  await settle('find bar closed', () => !$('.FindBar'), 3000)
+  return { ...r, ok: /^1\//.test(r.count) && r.painted > 0 && r.current === 1 && !$('.FindBar') }
 }
 
 /** All commits → one commit → All commits, through the commit picker dialog. */

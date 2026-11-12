@@ -8,9 +8,13 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   same Primer React release github.com runs: sticky toolbar, *All commits* picker (*Changes since
   your last review*, commit ranges), resizable file tree with filters, *Viewed* files, settings
   (*Unified / Split*, *Whitespace changes*, *Minimize comments*, *Compact line height*), expandable
-  context, word-level highlights, GitHub's syntax highlighting (`pl-*`), CODEOWNERS, *Overview /
-  Comments / Merge status* panels, and light or dark following the system (an export also takes
-  `?theme=dark_dimmed`, `light_high_contrast`, …).
+  context, word-level highlights, GitHub's syntax highlighting (`pl-*`), CODEOWNERS, image files
+  (*2-up / Swipe / Onion Skin*), commits that open their own changes, the *Comments* panel, and
+  light or dark following the system (an export also takes `?theme=dark_dimmed`,
+  `light_high_contrast`, …). Cmd/Ctrl + F finds text in all the changes, also in files not
+  rendered yet.
+- **Only what a local review needs**: no pull request description or *Merge status* panel; the
+  title and the tabs stay in place on every tab.
 - **Any window size and zoom**: from a phone-sized 320px window to 4K, the page changes layout at
   the same widths github.com does (file tree and side panels become dialogs, labels shorten,
   toolbar controls move into an overflow menu, …). The native window zooms with Cmd/Ctrl + `=` /
@@ -23,7 +27,7 @@ local checks, and when you are happy press **Confirm** to push the branch and op
 - **No web server**: a native window (system WebView via Tauri) talks to the CLI over IPC.
   Nothing listens on a port.
 - **Talks to `origin` only**: gh-prv-local fetches the base branch from `origin` (skip with `--no-fetch`),
-  looks up an open pull request on origin's GitHub host when the merge panel opens, and pushes and
+  looks up an open pull request on origin's GitHub host when you choose *Confirm*, and pushes and
   opens the pull request when you press *Confirm*. Nothing else leaves the machine: no other
   remote, no submodule hosts, no GitHub CLI telemetry or update checks, and images in pull request
   descriptions or commit messages are not loaded (they show as links, unlike github.com, which
@@ -36,13 +40,13 @@ local checks, and when you are happy press **Confirm** to push the branch and op
 
 ![Adding a line comment and submitting a review](docs/images/review.gif)
 
-**Local checks and the merge panel, then *Confirm* to push and open the pull request.**
+**Local checks, then *Confirm* to push and open the pull request.**
 
-![Running local checks from the merge panel](docs/images/checks.gif)
+![Running the local checks from the Checks tab](docs/images/checks.gif)
 
-**Split or unified, every theme, and the file tree.**
+**Split or unified, every theme, the file tree, and find in the changes.**
 
-![Switching to split view in the dark theme and opening a file from the tree](docs/images/views.gif)
+![Switching to split view in the dark theme, opening a file from the tree and finding a word](docs/images/views.gif)
 
 **Any window size, laid out the way github.com does.**
 
@@ -115,10 +119,12 @@ level is remembered); in a browser (`gh-prv-local export`) use the browser's zoo
   - *Comment / Request changes*: the window closes and the review is printed to stdout.
   - *Confirm*: edit the PR title / description (prefilled from the commit or
     `.github/pull_request_template.md`), optionally *draft*, then `gh-prv-local` pushes the reviewed commit
-    and runs `gh pr create` (or reuses the open PR). Also available from **Merge status**, which
-    shows the local checks and whether the branch conflicts with the base branch.
+    and runs `gh pr create` (or reuses the open PR). Also available from the **Conversation** tab,
+    which shows the local checks and whether the branch conflicts with the base branch.
 - *All commits* → *Changes since your last review* shows only the commits added since you last
-  submitted a review.
+  submitted a review. A commit's title (in *Commits* or *Conversation*) shows just that commit.
+- Cmd/Ctrl + F opens a find bar: Enter / Shift+Enter (or Cmd/Ctrl + G) go through the matches,
+  opening collapsed files on the way; Escape closes it.
 - Pending comments, *Viewed* state and the last review are saved in `.git/gh-prv-local/` (never committed).
 
 Example output:
@@ -159,7 +165,7 @@ Without a config, gh-prv-local detects `package.json` scripts (lint, typecheck, 
 `./gradlew check`, Cargo, Go, Makefile `lint`/`test` targets and pre-commit. Commands run in the
 repository root with `GH_PRV_LOCAL_BASE`, `GH_PRV_LOCAL_BASE_SHA`, `GH_PRV_LOCAL_HEAD`,
 `GH_PRV_LOCAL_MERGE_BASE` and `GH_PRV_LOCAL_CHANGED_FILES` (newline-separated) in the environment.
-Results appear in the **Checks** tab and in the *Merge status* panel.
+Results appear in the **Checks** tab and on the **Conversation** tab.
 
 ## How it works
 

@@ -6,6 +6,7 @@ import { AppHeader, PullHeader } from './components/PageHeader'
 import { ChangesToolbar, useShortcuts } from './components/changes/Toolbar'
 import { FileTreeDialog, FileTreePane } from './components/changes/FileTreePane'
 import { DiffList } from './components/changes/DiffEntry'
+import { FindBar } from './components/changes/FindBar'
 import { SidePanel } from './components/changes/SidePanel'
 import { ChecksTab, CommitsTab, ConversationTab } from './components/Tabs'
 import { copyText } from './components/common'
@@ -73,7 +74,6 @@ function Page() {
   const wide = useMediaQuery(MEDIA.dockedPanel)
   useShortcuts()
   useZoom()
-  const centered = tab === 'conversation' || tab === 'commits'
   const showPanel = !!panel && tab === 'files'
   // A docked panel hides while the window is too narrow for it and comes back when it widens.
   const { visible, docked } = panelLayout({ panel, panelDialog, tab }, wide)
@@ -81,7 +81,7 @@ function Page() {
     <>
       <AppHeader />
       <div className={`App-body ${docked ? 'has-panel' : ''}`}>
-        <div className={`App-main ${centered ? 'App-main--centered' : ''}`}>
+        <div className="App-main">
           <PageLayout
             containerWidth="full"
             padding="none"
@@ -95,7 +95,11 @@ function Page() {
             {tab === 'files' ? (
               <FilesTab loading={loading} warnings={warnings} />
             ) : (
-              <PageLayout.Content as="div" padding="none" className="PullPage-content">
+              <PageLayout.Content
+                as="div"
+                padding="none"
+                className={`PullPage-content ${tab === 'conversation' || tab === 'commits' ? 'PullPage-content--narrow' : ''}`}
+              >
                 <ErrorBoundary key={tab}>
                   {tab === 'commits' && <CommitsTab />}
                   {tab === 'checks' && <ChecksTab />}
@@ -138,6 +142,7 @@ function FilesTab({ loading, warnings }: { loading: boolean; warnings: string[] 
       <div className="ChangesToolbar-wrapper">
         <ChangesToolbar />
       </div>
+      <FindBar files={shown} />
       {!treePane && treeDialog && <FileTreeDialog files={shown} all={files} />}
       {treePane && treeVisible && (
         <PageLayout.Pane

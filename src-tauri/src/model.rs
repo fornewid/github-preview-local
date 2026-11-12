@@ -47,6 +47,9 @@ pub struct FileDiff {
     pub additions_w: u64,
     pub deletions_w: u64,
     pub too_large: bool,
+    /// Blob sizes in bytes of a binary file (github.com shows the change in size instead of lines).
+    pub old_size: Option<u64>,
+    pub new_size: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

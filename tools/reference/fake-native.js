@@ -20,6 +20,8 @@
           return data.snapshot
         case 'get_contents':
           return data.contents[`${args.side}:${args.path}`] ?? null
+        case 'get_image':
+          return data.images?.[`${args.side}:${args.path}`] ?? null
         case 'list_checks':
           return [
             { name: 'lint', run: 'npm run lint', source: '.gh-prv-local.toml' },

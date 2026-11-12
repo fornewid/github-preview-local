@@ -1,65 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
-import {
-  AlertIcon,
-  CheckCircleFillIcon,
-  ChevronRightIcon,
-  CommentDiscussionIcon,
-  GitMergeIcon,
-  InfoIcon,
-  PencilIcon,
-  TriangleDownIcon,
-  XIcon,
-} from '@primer/octicons-react'
-import { ActionList, ActionMenu, Button, Dialog, IconButton, SegmentedControl } from '@primer/react'
-import { canConfirm, useOpenPr, useStore, type Panel } from '../../store'
-import type { CheckStatus } from '../../types'
-import { Avatar, Markdown } from '../common'
-import { EditForm } from '../MarkdownEditor'
-import { ChecksStatusIcon, conflictsText, confirmLabel, publishBlocked, useChecksSummary, type ChecksSummary } from '../PageHeader'
+import { useRef, useState } from 'react'
+import { CommentDiscussionIcon, XIcon } from '@primer/octicons-react'
+import { Dialog, IconButton, SegmentedControl } from '@primer/react'
+import { useStore } from '../../store'
+import { Avatar } from '../common'
 import { revealFile } from './DiffEntry'
-import { plural } from '../../diff/util'
 import { clampSidePanel, setSidePanelWidth, SIDE_PANEL, useSidePanelWidth } from '../../layout'
 
-/** A single check's status as the merge status icons show it. */
-const CHECK_STATUS: Record<CheckStatus, ChecksSummary['status']> = {
-  idle: 'idle',
-  cancelled: 'idle',
-  queued: 'pending',
-  running: 'pending',
-  success: 'success',
-  failure: 'failure',
-}
-
-const PANELS: Array<[Panel, string, typeof InfoIcon]> = [
-  ['comments', 'Comments', CommentDiscussionIcon],
-  ['merge', 'Merge status', GitMergeIcon],
-  ['overview', 'Overview', InfoIcon],
-]
-
+/**
+ * The side panel beside the diffs: the review comments. (github.com also has Overview and Merge
+ * status panels; a local review needs neither, see docs/reference.md.)
+ */
 export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?: boolean }) {
   const panel = useStore((st) => st.panel)
   const setPanel = useStore((st) => st.setPanel)
-  const [editing, setEditing] = useState(false)
-  // The description draft lives here: the panel may switch between docked and dialog mid-edit.
-  const [draft, setDraft] = useState('')
-  // Start every edit from the current description (it can change elsewhere, e.g. in Confirm).
-  useEffect(() => {
-    if (editing) setDraft(useStore.getState().prBody)
-  }, [editing])
   const width = useSidePanelWidth((st) => st.width)
-  useEffect(() => setEditing(false), [panel])
   if (!panel) return null
-  const [, title, Icon] = PANELS.find(([k]) => k === panel)!
-  const editButton = panel === 'overview' && !editing && (
-    <IconButton variant="invisible" icon={PencilIcon} aria-label="Edit description" onClick={() => setEditing(true)} />
-  )
-  const body = (
-    <>
-      {panel === 'overview' && <OverviewPanel editing={editing} setEditing={setEditing} body={draft} setBody={setDraft} />}
-      {panel === 'comments' && <CommentsPanel />}
-      {panel === 'merge' && <MergePanel />}
-    </>
-  )
+  const title = 'Comments'
   // Narrower windows: a dialog from the right edge (fullscreen below 768px), titled like the panel.
   if (!docked)
     return (
@@ -75,12 +31,15 @@ export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?
               <div className="SidePanelDialog-headerContent">
                 <Dialog.Title id={dialogLabelId}>{title}</Dialog.Title>
               </div>
-              {editButton}
               <Dialog.CloseButton onClose={() => setPanel(null)} />
             </div>
           </Dialog.Header>
         )}
-        renderBody={() => <div className="SidePanelDialog-body">{body}</div>}
+        renderBody={() => (
+          <div className="SidePanelDialog-body">
+            <CommentsPanel />
+          </div>
+        )}
       />
     )
   return (
@@ -88,31 +47,17 @@ export function SidePanel({ docked, hidden = false }: { docked: boolean; hidden?
       <SidePanelDivider width={width} onResizeEnd={setSidePanelWidth} />
       <div className="SidePanel-inner">
         <div className="SidePanel-header">
-          <ActionMenu>
-            <ActionMenu.Anchor>
-              <Button variant="invisible" leadingVisual={Icon} trailingVisual={TriangleDownIcon} className="SidePanel-switch">
-                {title}
-              </Button>
-            </ActionMenu.Anchor>
-            <ActionMenu.Overlay>
-              <ActionList selectionVariant="single">
-                {PANELS.map(([k, label, I]) => (
-                  <ActionList.Item key={k} selected={k === panel} onSelect={() => setPanel(k)}>
-                    <ActionList.LeadingVisual>
-                      <I />
-                    </ActionList.LeadingVisual>
-                    {label}
-                  </ActionList.Item>
-                ))}
-              </ActionList>
-            </ActionMenu.Overlay>
-          </ActionMenu>
+          <h2 className="SidePanel-title">
+            <CommentDiscussionIcon size={16} />
+            {title}
+          </h2>
           <div className="SidePanel-headerActions">
-            {editButton}
-            <IconButton variant="invisible" icon={XIcon} aria-label={`Close ${title.toLowerCase()} panel`} onClick={() => setPanel(null)} />
+            <IconButton variant="invisible" icon={XIcon} aria-label="Close comments panel" onClick={() => setPanel(null)} />
           </div>
         </div>
-        <div className="SidePanel-body">{body}</div>
+        <div className="SidePanel-body">
+          <CommentsPanel />
+        </div>
       </div>
     </aside>
   )
@@ -185,47 +130,6 @@ function SidePanelDivider({ width, onResizeEnd }: { width: number; onResizeEnd: 
   )
 }
 
-function OverviewPanel({
-  editing,
-  setEditing,
-  body,
-  setBody,
-}: {
-  editing: boolean
-  setEditing: (v: boolean) => void
-  body: string
-  setBody: (v: string) => void
-}) {
-  const prBody = useStore((st) => st.prBody)
-  const setPr = useStore((st) => st.setPr)
-  if (editing)
-    return (
-      <EditForm
-        className="OverviewPanel-edit"
-        value={body}
-        onChange={setBody}
-        rows={12}
-        label="Pull request description"
-        saveLabel="Update description"
-        onCancel={() => {
-          setBody(prBody)
-          setEditing(false)
-        }}
-        onSave={() => {
-          setPr(null, body)
-          setEditing(false)
-        }}
-      />
-    )
-  return prBody.trim() ? (
-    <Markdown source={prBody} className="OverviewPanel-body" />
-  ) : (
-    <div className="OverviewPanel-empty fgColor-muted">
-      <em>No description provided.</em>
-    </div>
-  )
-}
-
 function CommentsPanel() {
   const drafts = useStore((st) => st.drafts)
   const author = useStore((st) => st.snapshot?.author ?? 'you')
@@ -268,120 +172,6 @@ function CommentsPanel() {
                 </span>
                 <span className="CommentsPanel-body">{c.body.split('\n')[0]}</span>
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function MergePanel() {
-  const s = useStore((st) => st.snapshot)!
-  const transport = useStore((st) => st.transport)!
-  const native = transport.kind === 'native'
-  const checks = useStore((st) => st.checks)
-  const runAll = useStore((st) => st.runAllChecks)
-  const setTab = useStore((st) => st.setTab)
-  const openReview = useStore((st) => st.openReview)
-  const range = useStore((st) => st.range)
-  const existing = useStore((st) => st.existingPr)
-  const pr = useOpenPr()
-  const findPr = useStore((st) => st.findPr)
-  const confirmable = canConfirm({ transport, range })
-  const summary = useChecksSummary()
-  useEffect(() => {
-    if (confirmable) void findPr()
-  }, [confirmable, findPr])
-  const { running, idle } = summary
-  const title =
-    summary.status === 'none'
-      ? native
-        ? 'No local checks configured'
-        : 'Local checks run in the native window'
-      : summary.status === 'success'
-        ? 'All checks have passed'
-        : summary.status === 'failure'
-          ? 'Some checks were not successful'
-          : summary.status === 'pending'
-            ? 'Some checks haven’t completed yet'
-            : 'Checks haven’t run yet'
-  const parts = [
-    summary.failed && `${summary.failed} failing`,
-    summary.passed && `${summary.passed} successful`,
-    idle && `${idle} not run`,
-  ].filter(Boolean)
-  const sub = summary.total
-    ? `${parts.join(', ')} ${summary.total === 1 ? 'check' : 'checks'}`
-    : native
-      ? 'Add a .gh-prv-local.toml to define checks.'
-      : 'Open this preview with gh-prv-local to run them.'
-  const conflicts = s.conflicts
-  const conflictsLine = conflictsText(
-    conflicts,
-    (files) => `Conflicting ${plural(files.length, 'file')}: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '…' : ''}`,
-  )
-  return (
-    <div className="MergePanel">
-      <button type="button" className="MergePanel-row MergePanel-row--link" onClick={() => setTab('checks')}>
-        <span className="MergePanel-icon">
-          <ChecksStatusIcon status={summary.status} size={24} />
-        </span>
-        <span className="MergePanel-text">
-          <span className="MergePanel-title">{title}</span>
-          <span className="MergePanel-sub">{sub}</span>
-        </span>
-        <ChevronRightIcon size={16} className="MergePanel-chevron" />
-      </button>
-      {summary.total > 0 && native && summary.status !== 'success' && (
-        <div className="MergePanel-row MergePanel-row--actions">
-          <Button size="small" disabled={running} onClick={() => void runAll()}>
-            {running ? 'Running checks…' : 'Run all checks'}
-          </Button>
-        </div>
-      )}
-      <div className="MergePanel-row">
-        <span className="MergePanel-icon">
-          {conflicts == null ? (
-            <AlertIcon size={24} fill="var(--fgColor-muted)" />
-          ) : conflicts.length ? (
-            <AlertIcon size={24} fill="var(--fgColor-attention)" />
-          ) : (
-            <CheckCircleFillIcon size={24} fill="var(--fgColor-success)" />
-          )}
-        </span>
-        <span className="MergePanel-text">
-          <span className="MergePanel-title">{conflictsLine.title}</span>
-          <span className="MergePanel-sub">{conflictsLine.sub}</span>
-        </span>
-      </div>
-      <div className="MergePanel-actions">
-        <Button variant="primary" disabled={!confirmable} onClick={() => openReview('CONFIRM')}>
-          {confirmLabel(pr)}
-        </Button>
-        <p className="MergePanel-note">
-          {!native
-            ? 'Publishing is available in the native window (`gh-prv-local`).'
-            : range.from
-              ? 'Switch back to all commits to confirm.'
-              : existing?.error
-                ? publishBlocked(existing.error)
-                : `Confirm pushes ${s.head.name} and ${pr ? 'updates the open pull request' : `opens a pull request into ${s.base.name}`}.`}
-        </p>
-        <p className="MergePanel-note">
-          Not ready?{' '}
-          <a href="#review" onClick={(e) => (e.preventDefault(), openReview('REQUEST_CHANGES'))}>
-            Request changes
-          </a>{' '}
-          to send your comments to the AI agent.
-        </p>
-      </div>
-      {checks.length > 0 && (
-        <ul className="MergePanel-checks">
-          {checks.map((c) => (
-            <li key={c.name}>
-              <ChecksStatusIcon status={CHECK_STATUS[c.status]} />
-              <span>{c.name}</span>
             </li>
           ))}
         </ul>

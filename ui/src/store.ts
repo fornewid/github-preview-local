@@ -20,7 +20,7 @@ import { MEDIA, mediaMatches } from './media'
 
 export type DiffView = 'split' | 'unified'
 export type Tab = 'conversation' | 'commits' | 'checks' | 'files'
-export type Panel = 'overview' | 'comments' | 'merge'
+export type Panel = 'comments'
 
 export interface Settings {
   diffView: DiffView
@@ -52,6 +52,8 @@ export interface Selection {
 
 interface FileUI {
   collapsed?: boolean
+  /** "Load diff" was pressed (a large or generated file). */
+  load?: boolean
   /** Expanded context, per whitespace mode (hunks differ between the two). */
   gaps?: Record<number, GapState>
   gapsW?: Record<number, GapState>
@@ -154,6 +156,8 @@ export interface Store {
   init(t: Transport): Promise<void>
   reload(q?: SnapshotQuery): Promise<void>
   setTab(t: Tab): void
+  /** Files changed for just this commit (github.com's /pull/N/changes/<sha>). */
+  openCommit(sha: string): void
   applySettings(s: Partial<Settings>): void
   setPanel(p: Panel | null): void
   setTreeDialog(open: boolean): void
@@ -162,6 +166,7 @@ export interface Store {
   setReviewDraft(d: Partial<Store['reviewDraft']>): void
   setFilter(f: Partial<Store['filter']>): void
   toggleCollapsed(path: string, value?: boolean): void
+  loadDiff(path: string): void
   setGaps(path: string, gaps: Record<number, GapState> | undefined, whitespace: boolean): void
   toggleViewed(f: FileDiff): void
   ensureContents(f: FileDiff): void
@@ -303,6 +308,10 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => (tab !== 'files' && s.panelDialog ? { tab, panel: null, panelDialog: false } : { tab }))
     window.scrollTo({ top: 0 })
   },
+  openCommit: (sha) => {
+    get().setTab('files')
+    void get().reload({ from: sha, to: sha })
+  },
 
   applySettings(s) {
     const settings = { ...get().settings, ...s }
@@ -344,6 +353,8 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       fileUI: { ...s.fileUI, [path]: { ...s.fileUI[path], collapsed: value ?? !s.fileUI[path]?.collapsed } },
     })),
+
+  loadDiff: (path) => set((s) => ({ fileUI: { ...s.fileUI, [path]: { ...s.fileUI[path], load: true } } })),
 
   setGaps: (path, gaps, whitespace) =>
     set((s) => ({ fileUI: { ...s.fileUI, [path]: { ...s.fileUI[path], [whitespace ? 'gapsW' : 'gaps']: gaps } } })),

@@ -17,6 +17,8 @@ import { contentKey, sidePath, type ContentSide } from './diff/util'
 export interface StaticData {
   snapshot: Snapshot
   contents: Record<string, string>
+  /** Image files as data URLs, keyed like `contents`. */
+  images?: Record<string, string>
 }
 
 export interface SnapshotQuery {
@@ -37,6 +39,8 @@ export interface Transport {
   kind: 'native' | 'static'
   getSnapshot(q?: SnapshotQuery): Promise<Snapshot>
   getContents(file: FileDiff, side: ContentSide): Promise<string | null>
+  /** An image file's side as a `data:` URL (see isImage), or null. */
+  getImage(file: FileDiff, side: ContentSide): Promise<string | null>
   loadState(snapshot: Snapshot): Promise<PersistedState>
   saveState(snapshot: Snapshot, state: PersistedState): Promise<void>
   listChecks(): Promise<CheckDef[]>
@@ -78,6 +82,7 @@ function createNative(): Transport {
     kind: 'native',
     getSnapshot: (q) => invoke<Snapshot>('get_snapshot', { from: q?.from ?? null, to: q?.to ?? null }),
     getContents: (f, side) => invoke<string | null>('get_contents', { path: sidePath(f, side), side }),
+    getImage: (f, side) => invoke<string | null>('get_image', { path: sidePath(f, side), side }),
     loadState: async () => (await invoke<PersistedState | null>('load_state')) ?? emptyState(),
     saveState: (_s, state) => invoke<void>('save_state', { state }),
     listChecks: () => invoke<CheckDef[]>('list_checks'),
@@ -108,6 +113,7 @@ function createStatic(data: StaticData): Transport {
     kind: 'static',
     getSnapshot: async () => data.snapshot,
     getContents: async (f, side) => data.contents[contentKey(f, side)] ?? null,
+    getImage: async (f, side) => data.images?.[contentKey(f, side)] ?? null,
     loadState: async (s) => {
       try {
         const raw = localStorage.getItem(stateKey(s))

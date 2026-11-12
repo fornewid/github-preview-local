@@ -133,26 +133,24 @@ await scene('review', { treeVisible: false }, async (page) => {
   await pause(page, 1600)
 })
 
-// 2. Local checks and the merge panel (native views, through the test bridge).
+// 2. Local checks (native views, through the test bridge).
 await scene(
   'checks',
   { treeVisible: false },
   async (page) => {
     await page.mouse.move(640, 300)
     await pause(page, 600)
-    await click(page, page.getByRole('button', { name: 'Merge status' }))
-    await pause(page, 1200)
-    await click(page, page.getByRole('button', { name: /Run all checks/ }))
-    await pause(page, 1500)
     await click(page, page.getByRole('link', { name: /^Checks/ }))
     await pause(page, 900)
+    await click(page, page.getByRole('button', { name: 'Run all' }))
+    await pause(page, 1500)
     await click(page, page.locator('.Checks-item').nth(1))
     await pause(page, 1800)
   },
   { native: true },
 )
 
-// 3. Views (dark theme): unified ↔ split, a file from the tree.
+// 3. Views (dark theme): unified ↔ split, a file from the tree, find in the changes.
 await scene(
   'views',
   { treeVisible: true, diffView: 'unified' },
@@ -164,7 +162,16 @@ await scene(
     await click(page, page.getByRole('menuitemradio', { name: 'Split' }))
     await pause(page, 1200)
     await click(page, page.locator('.FileTreePane [role="treeitem"]').last())
-    await pause(page, 1500)
+    await pause(page, 1200)
+    await page.keyboard.press('ControlOrMeta+f')
+    await pause(page, 400)
+    await page.keyboard.type('remember', { delay: 60 })
+    await pause(page, 900)
+    for (let i = 0; i < 2; i++) {
+      await page.keyboard.press('Enter')
+      await pause(page, 800)
+    }
+    await pause(page, 600)
   },
   { scheme: 'dark' },
 )

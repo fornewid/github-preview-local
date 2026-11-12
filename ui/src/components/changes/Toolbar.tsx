@@ -3,7 +3,6 @@ import {
   AlertIcon,
   CommentDiscussionIcon,
   GearIcon,
-  InfoIcon,
   KebabHorizontalIcon,
   SidebarCollapseIcon,
   SidebarExpandIcon,
@@ -86,14 +85,6 @@ export function ChangesToolbar() {
         <SettingsMenu />
         <div className="ChangesToolbar-divider" />
         <div className="ChangesToolbar-panels">
-          <IconButton
-            size="small"
-            variant="invisible"
-            icon={InfoIcon}
-            aria-label={panel === 'overview' ? 'Close overview panel' : 'Open overview panel'}
-            aria-expanded={panel === 'overview'}
-            onClick={() => setPanel(panel === 'overview' ? null : 'overview')}
-          />
           <Button
             size="small"
             className="ChangesToolbar-comments"
@@ -561,7 +552,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
               {checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && (
                 <Flash variant="warning">
                   {checks.failed > 0 ? `${plural(checks.failed, 'check')} failed.` : `${plural(checks.idle, 'check')} not run yet.`} See
-                  Merge status.
+                  the Checks tab.
                 </Flash>
               )}
               {!pr && (
