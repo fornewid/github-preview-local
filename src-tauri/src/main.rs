@@ -137,6 +137,10 @@ struct CheckRun {
     output: String,
 }
 
+/// A load that a newer one replaced (its page ignores it; a second tab of the same review that
+/// loads other commits meanwhile sees it).
+const SUPERSEDED: &str = "superseded: another load of this review (another tab?) asked for other commits meanwhile; reload this page";
+
 /// Output kept per check for a reloaded tab (the page keeps 200 000 characters).
 const CHECK_OUTPUT_KEPT: usize = 256 * 1024;
 
@@ -184,7 +188,7 @@ impl AppState {
         let _one = self.snapshot_lock.lock().map_err(|e| e.to_string())?;
         // A newer one was asked for meanwhile: this answer would be stale (the page ignores it).
         if !newest() {
-            return Err("superseded by a newer load".into());
+            return Err(SUPERSEDED.into());
         }
         let mut opts = self.opts.clone();
         // Fetch until a load has succeeded once.
@@ -194,7 +198,7 @@ impl AppState {
         let r = git::snapshot(&self.git, &opts, &range)?;
         self.loaded_once.store(true, Ordering::SeqCst);
         if !newest() {
-            return Err("superseded by a newer load".into());
+            return Err(SUPERSEDED.into());
         }
         let snap = r.snapshot.clone();
         *self.current.lock().map_err(|e| e.to_string())? = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
@@ -358,11 +362,7 @@ impl AppState {
             let mut cmd = std::process::Command::new(prog);
             cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
             proc::own_group(&mut cmd);
-            // One that ends at once with an error (a terminal editor without a terminal) did not open.
-            cmd.spawn().is_ok_and(|mut child| {
-                std::thread::sleep(Duration::from_millis(300));
-                !matches!(child.try_wait(), Ok(Some(status)) if !status.success())
-            })
+            cmd.spawn().is_ok()
         };
         if let Ok(editor) = std::env::var("GH_PRV_LOCAL_EDITOR") {
             if !editor.trim().is_empty() && spawn(editor.trim(), &[&f]) {

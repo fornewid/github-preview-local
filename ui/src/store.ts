@@ -246,7 +246,8 @@ export const useStore = create<Store>((set, get) => ({
   async init(t) {
     set({ transport: t, loading: true })
     try {
-      const snapshot = await t.getSnapshot()
+      // Another tab of the same review loading meanwhile replaces this load once: ask again.
+      const snapshot = await t.getSnapshot().catch((e) => (/^(Error: )?superseded/.test(String(e)) ? t.getSnapshot() : Promise.reject(e)))
       const st = await t.loadState(snapshot)
       set({
         snapshot,

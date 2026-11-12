@@ -30,9 +30,7 @@ const WRITE_TIME: Duration = Duration::from_secs(20);
 /// reconnects and catches up from the record).
 const STREAM_BACKLOG: usize = 4096;
 const STREAM_BACKLOG_BYTES: usize = 8 * 1024 * 1024;
-/// A page whose stream was dropped for not reading (a sleeping laptop, a frozen tab) is still
-/// there, just not reading: it counts as gone only after this long without news from it.
-const STALLED_GRACE: Duration = Duration::from_secs(600);
+
 /// Connections handled at once (a page needs a few); more are turned away.
 const MAX_CONNECTIONS: usize = 64;
 /// No page ever opened by then (no browser, an address never visited): the run ends as closed.
@@ -55,8 +53,6 @@ struct Server {
     busy: AtomicUsize,
     seen_page: AtomicBool,
     last_page: Mutex<Instant>,
-    /// Until when a page that stopped reading still counts as there.
-    stalled_until: Mutex<Option<Instant>>,
     submitted: AtomicBool,
     interrupted: AtomicBool,
 }
@@ -84,7 +80,6 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         busy: AtomicUsize::new(0),
         seen_page: AtomicBool::new(false),
         last_page: Mutex::new(Instant::now()),
-        stalled_until: Mutex::new(None),
         submitted: AtomicBool::new(false),
         interrupted: AtomicBool::new(false),
     });
@@ -111,8 +106,7 @@ pub fn run(state: Arc<AppState>, browser: &str) -> ! {
         let gone = seen
             && srv.pages.load(Ordering::SeqCst) == 0
             && srv.busy.load(Ordering::SeqCst) == 0
-            && srv.last_page.lock().map(|t| t.elapsed() > GONE_AFTER).unwrap_or(false)
-            && srv.stalled_until.lock().map(|t| t.is_none_or(|t| Instant::now() > t)).unwrap_or(true);
+            && srv.last_page.lock().map(|t| t.elapsed() > GONE_AFTER).unwrap_or(false);
         if gone {
             break;
         }
@@ -411,10 +405,17 @@ impl Server {
                                 Err(_) => return respond(&stream, "400 Bad Request", "text/plain", b"the body is not JSON", &[]),
                             }
                         };
+                        // Counted until its answer has gone out, however this ends.
+                        struct Busy<'a>(&'a Server);
+                        impl Drop for Busy<'_> {
+                            fn drop(&mut self) {
+                                self.0.touch();
+                                self.0.busy.fetch_sub(1, Ordering::SeqCst);
+                            }
+                        }
                         self.busy.fetch_add(1, Ordering::SeqCst);
+                        let _busy = Busy(self);
                         let answer = self.call(name, &args);
-                        self.touch();
-                        self.busy.fetch_sub(1, Ordering::SeqCst);
                         let (status, body) = match answer {
                             Ok(v) => ("200 OK", json!({ "ok": v })),
                             Err(e) => ("500 Internal Server Error", json!({ "error": e })),
@@ -487,8 +488,11 @@ impl Server {
     }
 
     /// A page's event stream: one JSON object per line (check progress), an empty line as a
-    /// heartbeat. While it is open, the tab is there.
+    /// heartbeat. While it is open, the tab is there: a page that stops reading (a frozen tab)
+    /// keeps it open, so writes here wait without a time limit until it reads or goes (a closed
+    /// tab ends them with an error); its queue meanwhile is bounded (see `broadcast`).
     fn events(&self, mut stream: &TcpStream) {
+        let _ = stream.set_write_timeout(None);
         let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nCache-Control: no-store\r\n\
                     X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
         if stream.write_all(head.as_bytes()).is_err() {
@@ -508,9 +512,6 @@ impl Server {
         }
         self.pages.fetch_add(1, Ordering::SeqCst);
         self.seen_page.store(true, Ordering::SeqCst);
-        if let Ok(mut t) = self.stalled_until.lock() {
-            *t = None;
-        }
         loop {
             let line = match rx.recv_timeout(HEARTBEAT) {
                 Ok(l) => {
@@ -520,13 +521,7 @@ impl Server {
                 Err(mpsc::RecvTimeoutError::Timeout) => String::new(),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if let Err(e) = stream.write_all(format!("{line}\n").as_bytes()).and_then(|_| stream.flush()) {
-                // Not reading, but connected: still there (it catches up when it reads again).
-                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
-                    if let Ok(mut t) = self.stalled_until.lock() {
-                        *t = Some(Instant::now() + STALLED_GRACE);
-                    }
-                }
+            if stream.write_all(format!("{line}\n").as_bytes()).and_then(|_| stream.flush()).is_err() {
                 break;
             }
         }

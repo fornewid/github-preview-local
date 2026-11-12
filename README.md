@@ -132,6 +132,8 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
 - Cmd/Ctrl + F opens a find bar: Enter / Shift+Enter (or Cmd/Ctrl + G) go through the matches,
   opening collapsed files on the way; Escape closes it.
 - Pending comments, *Viewed* state and the last review are saved in `.git/gh-prv-local/` (never committed).
+- *Open in editor* (a file's menu) uses `GH_PRV_LOCAL_EDITOR` (a GUI editor command, such as
+  `subl`: it opens without a terminal), else VS Code's `code`, else the system's text editor.
 
 Example output:
 
