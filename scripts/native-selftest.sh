@@ -4,7 +4,7 @@
 #
 #   - commit range: pick one commit in the commit picker, then All commits again
 #   - local checks: Run all (a passing, a failing and a slow check), cancel the slow one
-#   - Confirm: push the branch and open the pull request
+#   - Confirm (with --publish): push the branch and open the pull request
 #
 #   scripts/native-selftest.sh [--bin path/to/gh-prv-local]
 #       Offline. The scratch repository's `origin` looks like github.com (so gh-prv-local knows the
@@ -142,7 +142,7 @@ run_round() {
   local head_sha remote_sha pr_url pr_json leftover code
   head_sha=$(git rev-parse HEAD)
   set +e
-  PATH="$PATH_PREFIX$PATH" GH_PRV_LOCAL_SELFTEST=flows timed 900 "$PRV" --no-fetch --base main --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
+  PATH="$PATH_PREFIX$PATH" GH_PRV_LOCAL_SELFTEST=flows timed 900 "$PRV" --no-fetch --base main --publish --format json > "$WORK/out.txt" 2> "$WORK/err.txt"
   code=$?
   set -e
   if [ -n "$GH_REPO" ]; then

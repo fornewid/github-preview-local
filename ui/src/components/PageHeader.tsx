@@ -120,9 +120,9 @@ export function conflictsText(conflicts: string[] | null | undefined, files: (co
   return { title: 'No conflicts with base branch', sub: 'Merging can be performed automatically.' }
 }
 
-/** The merge box's Confirm button. */
-export function confirmLabel(pr: ExistingPr | null) {
-  return pr ? `Confirm and push to #${pr.number}` : 'Confirm and create pull request'
+/** The merge box's Confirm button: what it does (only an approval without `--publish`). */
+export function confirmLabel(pr: ExistingPr | null, publish: boolean | undefined) {
+  return !publish ? 'Confirm' : pr ? `Confirm and push to #${pr.number}` : 'Confirm and create pull request'
 }
 
 /** Why Confirm cannot push: the first line of the failed pull request lookup. */

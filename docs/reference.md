@@ -100,8 +100,11 @@ media queries without a `change` event, so gh-prv-local also re-checks on `resiz
   *Copy file path*. The narrow commit menu has only *Copy full SHA* (no *View commit details* /
   *Browse repository at this point*).
 - The pull request description (Overview panel, first comment of Conversation) and *Merge status*
-  (header button and panel): a local review is about the changes and the comments. The description
-  is written in *Confirm*; checks are in the Checks tab and with conflicts on Conversation.
+  (header button and panel): a local review is about the changes and the comments. The agent
+  writes the description when it opens the pull request (with `--publish`, *Confirm* has it);
+  checks are in the Checks tab and with conflicts on Conversation.
+- *Approve* is *Confirm*: it hands the approval to the agent, which opens the pull request the
+  repository's way. With `--publish` it pushes the branch and opens the pull request itself.
 - Conversation and Commits keep github.com's `container-xl` width but start at the same left edge
   as Files changed, so the title and the tabs do not move between tabs (github.com centers them).
 - Popups are roomier when the window has room: the commit picker is as wide as its longest commit

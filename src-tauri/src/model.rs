@@ -98,6 +98,9 @@ pub struct Snapshot {
     /// Files that conflict when merging head into base; None when unknown.
     pub conflicts: Option<Vec<String>>,
     pub existing_pr: Option<ExistingPr>,
+    /// Confirm pushes the branch and opens the pull request (`--publish`); otherwise it only
+    /// returns the approval, and the agent opens the pull request the repository's way.
+    pub publish: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

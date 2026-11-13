@@ -92,9 +92,12 @@ function loadSettings(): Settings {
   return s
 }
 
-/** Confirm (push + pull request) needs the CLI and the full branch, not a commit range. */
-export function canConfirm(s: Pick<Store, 'transport' | 'range'>) {
-  return connected(s.transport) && !s.range.from
+/**
+ * Confirm approves the full branch, not a commit range. With `--publish` it also pushes and opens the
+ * pull request, which needs gh-prv-local running (not an export).
+ */
+export function canConfirm(s: Pick<Store, 'transport' | 'range' | 'snapshot'>) {
+  return !s.range.from && (!s.snapshot?.publish || connected(s.transport))
 }
 
 /** The pull request already open for this branch: as looked up for Confirm, else from the snapshot. */
@@ -379,7 +382,7 @@ export const useStore = create<Store>((set, get) => ({
     const wanted = e ?? get().reviewDraft.event
     const event = wanted === 'CONFIRM' && !canConfirm(get()) ? 'COMMENT' : wanted
     set((s) => ({ reviewOpen: true, reviewDraft: { ...s.reviewDraft, event } }))
-    if (event === 'CONFIRM') void get().findPr()
+    if (event === 'CONFIRM' && get().snapshot?.publish) void get().findPr()
   },
   setReviewDraft: (d) => set((s) => ({ reviewDraft: { ...s.reviewDraft, ...d } })),
 
@@ -505,9 +508,9 @@ export const useStore = create<Store>((set, get) => ({
   async submit(event, body, publish) {
     const { transport, snapshot, drafts, prTitle, prBody } = get()
     if (!transport || !snapshot) return
-    if (event === 'CONFIRM' && !canConfirm(get())) throw new Error('Confirm needs gh-prv-local running and all commits selected.')
+    if (event === 'CONFIRM' && !canConfirm(get())) throw new Error('Confirm needs all commits selected (and, to push, gh-prv-local running).')
     let pub: ReviewResult['publish'] = null
-    if (event === 'CONFIRM' && publish) {
+    if (event === 'CONFIRM' && publish && snapshot.publish) {
       set({ busy: 'Pushing branch and opening pull request…' })
       try {
         const r = await transport.publish({ title: prTitle, body: prBody, draft: publish.draft })

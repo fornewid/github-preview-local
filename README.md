@@ -2,7 +2,8 @@
 
 Preview your branch **exactly the way github.com's pull request "Files changed" page shows it**,
 before you push. Review it with line comments, hand the review to an AI agent (Claude Code), run
-local checks, and when you are happy press **Confirm** to push the branch and open the pull request.
+local checks, and when you are happy press **Confirm**: the agent opens the pull request the way your
+repository does it (or, with `--publish`, gh-prv-local pushes the branch and opens it).
 
 - **Same look and options as github.com** (the new *Files changed* experience, 2026), built on the
   same Primer React release github.com runs: sticky toolbar, *All commits* picker (*Changes since
@@ -30,8 +31,8 @@ local checks, and when you are happy press **Confirm** to push the branch and op
   the run (so does a page never opened within 10 minutes). With `--window` it opens in a native window
   instead (system WebView via Tauri), which talks to the CLI over IPC: nothing listens on a port.
 - **Talks to `origin` only**: gh-prv-local fetches the base branch from `origin` (skip with `--no-fetch`),
-  looks up an open pull request on origin's GitHub host when you choose *Confirm*, and pushes and
-  opens the pull request when you press *Confirm*. Nothing else leaves the machine: no other
+  and with `--publish` looks up an open pull request on origin's GitHub host when you choose
+  *Confirm* and pushes and opens the pull request when you press it. Nothing else leaves the machine: no other
   remote, no submodule hosts, no GitHub CLI telemetry or update checks, and images in pull request
   descriptions or commit messages are not loaded (they show as links, unlike github.com, which
   serves them through its image proxy). Local checks run your own commands, which may use the
@@ -44,7 +45,7 @@ local checks, and when you are happy press **Confirm** to push the branch and op
 
 ![Adding a line comment and submitting a review](docs/images/review.gif)
 
-**Local checks, then *Confirm* to push and open the pull request.**
+**Local checks, then *Confirm*.**
 
 ![Running the local checks from the Checks tab](docs/images/checks.gif)
 
@@ -95,7 +96,10 @@ From source (Rust and Node.js 20+): `./scripts/install.sh --source` in a clone.
 ```
 
 Then run `/gh-prv-local` (or just ask Claude to "preview the PR"). A browser tab opens; when you submit,
-Claude receives your review and addresses each comment. *Confirm* pushes and opens the PR.
+Claude receives your review, addresses each comment and opens the next round itself (with the same
+options). The rounds end when you press *Confirm* (Claude then opens the pull request the way the
+repository does it), close the tab without a review, or Claude needs to ask you something. Tick
+*Don't show this again* after a review so that finished rounds close their tabs.
 
 ## Usage
 
@@ -106,6 +110,7 @@ gh-prv-local --uncommitted           # include uncommitted + untracked changes (
 gh-prv-local --no-fetch              # do not fetch the base branch
 gh-prv-local --browser=chrome        # in a given browser (or GH_PRV_LOCAL_BROWSER=chrome); none: only print the address
 gh-prv-local --window                # in a native window instead (no server)
+gh-prv-local --publish               # Confirm pushes the branch and opens the pull request itself
 gh-prv-local --format json           # JSON review on stdout
 gh-prv-local -C path/to/repo         # run in another repository
 
@@ -128,10 +133,13 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the review is printed to stdout and gh-prv-local ends (the window
     closes; a tab says it is done, or with *Don't show this again* ticked closes itself).
-  - *Confirm*: edit the PR title / description (prefilled from the commit or
-    `.github/pull_request_template.md`), optionally *draft*, then `gh-prv-local` pushes the reviewed commit
-    and runs `gh pr create` (or reuses the open PR). Also available from the **Conversation** tab,
-    which shows the local checks and whether the branch conflicts with the base branch.
+  - *Confirm*: the approval (with your summary) is printed the same way, and nothing is pushed: the
+    agent pushes and opens the pull request the way the repository does it (its title rules,
+    description, labels, …). With `--publish`, Confirm instead lets you edit the PR title /
+    description (prefilled from the commit or `.github/pull_request_template.md`), optionally
+    *draft*, then `gh-prv-local` pushes the reviewed commit and runs `gh pr create` (or reuses the
+    open PR). Also available from the **Conversation** tab, which shows the local checks and whether
+    the branch conflicts with the base branch.
 - *All commits* → *Changes since your last review* shows only the commits added since you last
   submitted a review. A commit's title (in *Commits* or *Conversation*) shows just that commit.
 - Cmd/Ctrl + F opens a find bar: Enter / Shift+Enter (or Cmd/Ctrl + G) go through the matches,
@@ -219,7 +227,8 @@ cargo build --release --manifest-path src-tauri/Cargo.toml
 GH_PRV_LOCAL_SELFTEST=1 src-tauri/target/release/gh-prv-local --no-fetch
 
 # The native-only features, clicked through in the real window: a commit range, local checks
-# (pass, fail, cancel) and Confirm (push + pull request, then pushing to that open pull request).
+# (pass, fail, cancel) and Confirm with --publish (push + pull request, then pushing to that open
+# pull request).
 scripts/native-selftest.sh                            # offline: local remote, stand-in `gh`
 scripts/native-selftest.sh --github you/scratch-repo  # real push and pull request (your login)
 

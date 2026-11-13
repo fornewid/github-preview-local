@@ -181,5 +181,26 @@ async function submitWithCloseTab(port, { extraEntry }) {
   check('a tab the browser keeps open shows the dialog instead (still ticked)', r.code === 0 && !r.closed && /close it yourself/.test(text) && ticked, JSON.stringify({ code: r.code, closed: r.closed, entries: r.entries, text }))
   await r.browser.close()
 }
+// 5. Confirm without --publish: the approval goes to stdout and nothing is pushed (the server
+// refuses to publish in this run).
+{
+  const run = start(19615)
+  const url = await run.url
+  const origin = url.split('/?')[0]
+  const { browser, page: tab } = await openChrome({ width: 1200, height: 800 })
+  await tab.goto(url)
+  await tab.waitForSelector('.DiffEntry', { timeout: 20000 })
+  const token = await tab.evaluate(() => sessionStorage.getItem('prv:token'))
+  const refused = await (await fetch(origin + '/api/publish', { method: 'POST', headers: { 'X-Prv-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify({ req: { title: 't', body: '', draft: false } }) })).json()
+  check('without --publish the server does not push', /does not push/.test(refused.error ?? ''), JSON.stringify(refused))
+  await tab.getByRole('button', { name: 'Submit review' }).click()
+  await tab.getByRole('radio', { name: 'Confirm' }).check()
+  await tab.getByRole('textbox', { name: 'Review body' }).fill('Ship it')
+  await tab.locator('.ReviewForm-submit').click()
+  const code = await Promise.race([run.exit, new Promise((r) => setTimeout(() => r('timeout'), 15000))])
+  if (code === 'timeout') run.p.kill()
+  check('Confirm: the approval on stdout, for the agent to open the pull request', code === 0 && /Pull request preview: Confirmed/.test(run.out()) && /Nothing was pushed/.test(run.out()) && /Ship it/.test(run.out()), `${code} ${run.out().slice(0, 300)}`)
+  await browser.close()
+}
 console.log(results.join('\n'))
 process.exit(results.some((r) => r.startsWith('FAIL')) ? 1 : 0)

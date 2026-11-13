@@ -268,10 +268,11 @@ await check('CODEOWNERS shield label', async () => {
   assert(/^Owned by .+ \(from CODEOWNERS line \d+\)$/.test(label ?? ''), `label ${label}`)
 })
 
-await check('Confirm is disabled without publishing (static export)', async () => {
+await check('Confirm approves in an export too (it pushes nothing without --publish)', async () => {
   await page.evaluate(() => window.__prv.getState().setTab('conversation'))
   await settle()
-  assert(await page.locator('.MergeBox').getByRole('button', { name: /Confirm/ }).isDisabled(), 'merge box confirm disabled')
+  const confirm = page.locator('.MergeBox').getByRole('button', { name: /Confirm/ })
+  assert((await confirm.isEnabled()) && (await confirm.textContent()).trim() === 'Confirm', 'merge box Confirm, enabled')
   assert((await page.locator('.CommitRow-title, .TimelineItem-commitTitle a').count()) === 0, 'no commit links without the native window')
   await page.evaluate(() => window.__prv.getState().setTab('files'))
   await settle()
@@ -291,7 +292,7 @@ await check('review draft survives closing the overlay', async () => {
     await settle()
     if (i === 0) {
       assert((await page.getByRole('textbox', { name: 'Review body' }).inputValue()) === 'Draft kept', 'draft restored')
-      assert(await page.getByRole('radio', { name: 'Confirm' }).isDisabled(), 'confirm radio disabled')
+      assert(await page.getByRole('radio', { name: 'Confirm' }).isEnabled(), 'confirm radio enabled')
     }
     await page.keyboard.press('Escape')
     await settle()
@@ -500,6 +501,48 @@ await check("native views (fake bridge): a commit's title opens Files changed fo
   await p.waitForTimeout(400)
   assert((await p.locator('.TimelineItem-commitTitle a.Link--secondary, .TimelineItem-sha a.Link--secondary').count()) >= 2, 'timeline commit links')
   await native.close()
+})
+
+await check('Confirm: an approval for the agent, or with --publish a push and a pull request (fake bridge)', async () => {
+  for (const publish of [false, true]) {
+    const native = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+    await native.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
+    await native.addInitScript((v) => (window.__prvPublish = v), publish)
+    const p = await native.newPage()
+    p.on('pageerror', (e) => errors.push(e.message))
+    await p.goto(exportUrl(file), { waitUntil: 'load' })
+    await p.waitForTimeout(1500)
+    await p.getByRole('link', { name: /^Conversation/ }).click()
+    await p.waitForTimeout(300)
+    const merge = (await p.locator('.MergeBox').getByRole('button', { name: /Confirm/ }).textContent()).trim()
+    assert(merge === (publish ? 'Confirm and create pull request' : 'Confirm'), `merge box: ${merge}`)
+    await p.locator('.MergeBox').getByRole('button', { name: /Confirm/ }).click()
+    await p.waitForTimeout(500)
+    const form = p.locator('.ReviewForm')
+    const caption = await form.getByRole('radio', { name: 'Confirm' }).evaluate((r) => r.closest('[class*="FormControl"]')?.parentElement?.textContent ?? '')
+    const titled = await form.getByRole('textbox', { name: 'Title' }).count()
+    const button = (await form.locator('.ReviewForm-submit').textContent()).trim()
+    if (publish) {
+      assert(/Push .+ and open a pull request into/.test(caption), `caption: ${caption}`)
+      assert(titled === 1 && button.startsWith('Confirm and create pull request'), `title field ${titled}, button ${button}`)
+    } else {
+      assert(/approve these changes for a pull request into/.test(caption), `caption: ${caption}`)
+      assert(titled === 0 && button.startsWith('Submit review'), `title field ${titled}, button ${button}`)
+    }
+    await native.close()
+  }
+  // An export: the approval tells the agent to open the pull request itself.
+  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  p.on('pageerror', (e) => errors.push(e.message))
+  await openExport(p, file, { wait: 1500 })
+  await p.getByRole('button', { name: 'Submit review' }).click()
+  await p.waitForTimeout(300)
+  await p.getByRole('radio', { name: 'Confirm' }).check()
+  await p.locator('.ReviewForm-submit').click()
+  await p.waitForTimeout(800)
+  const md = await p.locator('.SubmittedDialog pre').innerText()
+  assert(/# Pull request preview: Confirmed/.test(md) && /Nothing was pushed: push `.+` and open the pull request into `.+` the way this repository does it/.test(md), md.slice(0, 300))
+  await p.close()
 })
 
 await check('image files: added or deleted alone, changed in 2-up, Swipe and Onion Skin; sizes in the header', async () => {

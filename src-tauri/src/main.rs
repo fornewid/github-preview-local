@@ -3,7 +3,8 @@
 //! `gh-prv-local` opens a native window (system WebView, Tauri IPC — no web server)
 //! showing the branch the way GitHub's "Files changed" tab would. When you
 //! submit a review the result is printed to stdout, so AI agents such as
-//! Claude Code can act on it. "Confirm" pushes the branch and opens the PR.
+//! Claude Code can act on it. "Confirm" approves the branch (with `--publish` it also pushes the
+//! branch and opens the PR).
 
 mod checks;
 mod export;
@@ -34,7 +35,8 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder}
     about = "Preview your branch as a GitHub pull request, locally.",
     long_about = "Opens your branch in a GitHub-style \"Files changed\" view (merge-base...HEAD, like a pull request)\n\
                   in a browser tab (served on 127.0.0.1 for this run only), or in a native window with --window.\n\
-                  Submitting a review prints it to stdout for AI agents; \"Confirm\" pushes and opens the pull request."
+                  Submitting a review prints it to stdout for AI agents. \"Confirm\" approves the branch, for the agent to\n\
+                  open the pull request the repository's way; with --publish it pushes and opens the pull request itself."
 )]
 struct Cli {
     /// Base branch or ref (default: the remote's default branch, e.g. origin/main)
@@ -62,6 +64,10 @@ struct Cli {
     /// Review in the native window instead of a browser tab (nothing is served)
     #[arg(long, conflicts_with = "browser")]
     window: bool,
+    /// Confirm pushes the branch and opens the pull request (`gh pr create`). Without it, Confirm
+    /// only returns the approval, and nothing is pushed.
+    #[arg(long)]
+    publish: bool,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -319,12 +325,16 @@ impl AppState {
         Ok(())
     }
 
+    /// Only for Confirm with `--publish`: otherwise nothing asks origin's GitHub host.
     fn find_pr(&self) -> Result<Option<ExistingPr>, String> {
-        let Some(cur) = self.current() else { return Ok(None) };
+        let Some(cur) = self.current().filter(|_| self.opts.publish) else { return Ok(None) };
         publish::find_pr(&self.git, &cur.snapshot)
     }
 
     fn publish(&self, req: &PublishRequest) -> Result<PublishResult, String> {
+        if !self.opts.publish {
+            return Err("Confirm does not push in this run (gh-prv-local --publish does)".into());
+        }
         let Some(cur) = self.current() else { return Err("nothing loaded".into()) };
         publish::publish(&self.git, cur.remote.as_deref(), &cur.snapshot, req)
     }
@@ -661,7 +671,14 @@ fn main() {
     }
     let cwd = cli.dir.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
     let git = Git::discover(&cwd).unwrap_or_else(|e| fail(e));
-    let opts = Options { base: cli.base.clone(), head: cli.head.clone(), fetch: !cli.no_fetch, uncommitted: cli.uncommitted };
+    let opts = Options {
+        base: cli.base.clone(),
+        head: cli.head.clone(),
+        fetch: !cli.no_fetch,
+        uncommitted: cli.uncommitted,
+        // Only the review itself confirms (an export has no gh-prv-local to push).
+        publish: cli.publish && cli.command.is_none(),
+    };
 
     match cli.command {
         Some(Cmd::Export { output, open, data }) => {

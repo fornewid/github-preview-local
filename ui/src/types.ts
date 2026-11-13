@@ -84,6 +84,8 @@ export interface Snapshot {
   /** Paths that conflict when merging into the base branch; null when unknown. */
   conflicts?: string[] | null
   existingPr?: ExistingPr | null
+  /** Confirm pushes the branch and opens the pull request (`--publish`); otherwise it only approves. */
+  publish?: boolean
 }
 
 export type Side = 'LEFT' | 'RIGHT'

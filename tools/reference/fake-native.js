@@ -20,7 +20,8 @@
           // A commit range loads like a slow repository would (`__prvSlowRange` ms), so a test can
           // look at the page while it does.
           if (args?.from && window.__prvSlowRange) await new Promise((r) => setTimeout(r, window.__prvSlowRange))
-          return data.snapshot
+          // `__prvPublish`: as if run with --publish (Confirm pushes and opens the pull request).
+          return { ...data.snapshot, publish: !!window.__prvPublish }
         case 'get_contents':
           return data.contents[`${args.side}:${args.path}`] ?? null
         case 'get_image':

@@ -53,11 +53,18 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
           ? `The reviewer confirmed the changes. Branch \`${r.head.name}\` was pushed and a ${r.publish.draft ? 'draft ' : ''}pull request was opened: ${r.publish.url}`
           : `The reviewer confirmed the changes. Branch \`${r.head.name}\` was pushed to the existing pull request: ${r.publish.url}`,
       )
-    } else out.push('The reviewer confirmed the changes.')
+    } else
+      out.push(
+        `The reviewer confirmed the changes. Nothing was pushed: push \`${r.head.name}\` and open the pull request into \`${r.base.name}\` ` +
+          'the way this repository does it (its title rules, description, labels, reviewers).',
+      )
   } else if (r.event === 'REQUEST_CHANGES') {
-    out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again to request another review.')
+    out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again (same options) for the next review.')
   } else {
-    out.push('The reviewer left comments. Consider each one; reply in your summary if you decide not to change something.')
+    out.push(
+      'The reviewer left comments. Consider each one; reply in your summary if you decide not to change something. ' +
+        'Then run `gh-prv-local` again (same options) for the next review.',
+    )
   }
   if (r.body.trim()) {
     out.push('', '## Review summary', '', r.body.trim())

@@ -446,6 +446,16 @@ function ReviewButton() {
   )
 }
 
+/** Confirm with checks that failed or have not run (the Checks tab has them). */
+function ChecksWarning({ checks }: { checks: ReturnType<typeof useChecksSummary> }) {
+  return (
+    <Flash variant="warning">
+      {checks.failed > 0 ? `${plural(checks.failed, 'check')} failed.` : `${plural(checks.idle, 'check')} not run yet.`} See the
+      Checks tab.
+    </Flash>
+  )
+}
+
 function ReviewForm({ onClose }: { onClose: () => void }) {
   const s = useStore((st) => st.snapshot)!
   const transport = useStore((st) => st.transport)!
@@ -467,9 +477,11 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
   const setDraft = (v: boolean) => setReviewDraft({ draft: v })
   const setError = (v: string | null) => setReviewDraft({ error: v })
   const canPublish = connected(transport)
-  const confirmable = canConfirm({ transport, range })
+  const confirmable = canConfirm({ transport, range, snapshot: s })
+  // Without --publish, Confirm is an approval like the others: no push, no pull request lookup.
+  const publishing = event === 'CONFIRM' && !!s.publish
   const blocked =
-    !!busy || (event === 'CONFIRM' && (!confirmable || !!existing?.loading || !!existing?.error))
+    !!busy || (event === 'CONFIRM' && !confirmable) || (publishing && (!!existing?.loading || !!existing?.error))
 
   const doSubmit = async () => {
     if (blocked) return
@@ -479,7 +491,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
       return
     }
     try {
-      await submit(event, body, event === 'CONFIRM' ? { draft } : undefined)
+      await submit(event, body, publishing ? { draft } : undefined)
     } catch (e) {
       setError(String(e))
     }
@@ -513,21 +525,28 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
               checked={event === 'CONFIRM'}
               onChange={() => {
                 setEvent('CONFIRM')
-                void findPr()
+                if (s.publish) void findPr()
               }}
             />
             <FormControl.Label>Confirm</FormControl.Label>
             <FormControl.Caption>
-              {!canPublish
-                ? 'Needs `gh-prv-local` running (not an export).'
-                : range.from
-                  ? 'Switch back to all commits to confirm.'
-                  : pr
-                    ? `Push ${s.head.name} to the existing pull request #${pr.number}.`
-                    : `Push ${s.head.name} and open a pull request into ${s.base.name}.`}
+              {range.from
+                ? 'Switch back to all commits to confirm.'
+                : !s.publish
+                  ? `Submit feedback and approve these changes for a pull request into ${s.base.name}.`
+                  : !canPublish
+                    ? 'Needs `gh-prv-local` running (not an export).'
+                    : pr
+                      ? `Push ${s.head.name} to the existing pull request #${pr.number}.`
+                      : `Push ${s.head.name} and open a pull request into ${s.base.name}.`}
             </FormControl.Caption>
           </FormControl>
-          {event === 'CONFIRM' && (
+          {event === 'CONFIRM' && !publishing && checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && (
+            <div className="ReviewForm-confirm">
+              <ChecksWarning checks={checks} />
+            </div>
+          )}
+          {publishing && (
             <div className="ReviewForm-confirm">
               {existing?.loading && <div className="fgColor-muted">Checking for an open pull request…</div>}
               {existing?.error && (
@@ -549,12 +568,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
                   <AlertIcon size={16} /> You have uncommitted changes. Only committed changes are pushed.
                 </Flash>
               )}
-              {checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && (
-                <Flash variant="warning">
-                  {checks.failed > 0 ? `${plural(checks.failed, 'check')} failed.` : `${plural(checks.idle, 'check')} not run yet.`} See
-                  the Checks tab.
-                </Flash>
-              )}
+              {checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && <ChecksWarning checks={checks} />}
               {!pr && (
                 <>
                   <FormControl>
@@ -586,7 +600,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
         </span>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={blocked} onClick={() => void doSubmit()} className="ReviewForm-submit">
-          {busy ? busy : event === 'CONFIRM' ? (pr ? 'Confirm and push' : 'Confirm and create pull request') : 'Submit review'}
+          {busy ? busy : publishing ? (pr ? 'Confirm and push' : 'Confirm and create pull request') : 'Submit review'}
           {!busy && <KeybindingHint keys="Mod+Enter" variant="onEmphasis" size="small" />}
         </Button>
       </div>

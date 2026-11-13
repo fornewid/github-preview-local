@@ -148,6 +148,8 @@ pub struct Options {
     pub head: Option<String>,
     pub fetch: bool,
     pub uncommitted: bool,
+    /// Confirm pushes the branch and opens the pull request (`--publish`).
+    pub publish: bool,
 }
 
 /// The two tree-ish endpoints used for the diff and for file contents.
@@ -779,6 +781,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         codeowners,
         conflicts,
         existing_pr: None,
+        publish: opts.publish,
     };
     Ok(Resolved { snapshot, ends, remote })
 }

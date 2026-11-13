@@ -47,7 +47,7 @@ export function ConversationTab() {
   const transport = useStore((st) => st.transport)
   const range = useStore((st) => st.range)
   const pr = useOpenPr()
-  const confirmable = canConfirm({ transport, range })
+  const confirmable = canConfirm({ transport, range, snapshot: s })
   const checks = useChecksSummary()
   const conflicts = conflictsText(s.conflicts, (files) => files.slice(0, 5).join(', '))
   return (
@@ -120,7 +120,7 @@ export function ConversationTab() {
                   openReview('CONFIRM')
                 }}
               >
-                {confirmLabel(pr)}
+                {confirmLabel(pr, s.publish)}
               </Button>
             </div>
           </div>

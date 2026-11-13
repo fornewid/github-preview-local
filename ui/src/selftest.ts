@@ -2,7 +2,7 @@
 //
 //   GH_PRV_LOCAL_SELFTEST=1 gh-prv-local
 //       render, highlight and zoom, then exit with a report
-//   GH_PRV_LOCAL_SELFTEST=flows gh-prv-local
+//   GH_PRV_LOCAL_SELFTEST=flows gh-prv-local --publish
 //       also click through a commit range, the local checks and Confirm (push + pull request).
 //       Only in a scratch repository prepared by scripts/native-selftest.sh (gh-prv-local
 //       refuses otherwise).
@@ -206,6 +206,7 @@ async function confirm(): Promise<void> {
   await sleep(500)
   click($('.ReviewButton'), 'Submit review')
   await until('review form', () => $('.ReviewForm'))
+  if (!st().snapshot?.publish) throw new Error('Confirm pushes only with --publish (scripts/native-selftest.sh passes it)')
   click($('input[value="CONFIRM"]'), 'Confirm option')
   await until('open pull request lookup', () => st().existingPr && !st().existingPr!.loading)
   if (st().existingPr?.error) throw new Error(`pull request lookup failed: ${st().existingPr!.error}`)
