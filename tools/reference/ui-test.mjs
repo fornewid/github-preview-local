@@ -165,7 +165,16 @@ await check('settings menu fits its content (no scrollbar inside it)', async () 
 })
 
 await check("find (Cmd/Ctrl+F): a browser tab or an export leaves it to the browser's find", async () => {
-  await page.evaluate(() => addEventListener('keydown', (e) => (window.__prvFindKey = e.defaultPrevented), { once: true }))
+  // The F itself (the modifier's keydown comes first), after the page's own listeners.
+  await page.evaluate(() => {
+    window.__prvFindKey = undefined
+    const on = (e) => {
+      if (e.key.toLowerCase() !== 'f') return
+      window.__prvFindKey = e.defaultPrevented
+      removeEventListener('keydown', on)
+    }
+    addEventListener('keydown', on)
+  })
   await page.keyboard.press('ControlOrMeta+f')
   await settle(200)
   assert((await page.locator('.FindBar').count()) === 0 && (await page.evaluate(() => window.__prvFindKey)) === false, 'not taken from the browser')
@@ -173,16 +182,16 @@ await check("find (Cmd/Ctrl+F): a browser tab or an export leaves it to the brow
 
 await check('find in the window (fake bridge): counts every match, paints the ones on screen, goes to the next, Escape closes', async () => {
   const native = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
-  await native.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
-  const p = await native.newPage()
-  p.on('pageerror', (e) => errors.push(e.message))
-  await p.goto(exportUrl(file), { waitUntil: 'load' })
-  await p.waitForTimeout(1500)
-  const word = await p
-    .locator('.DiffEntry td[data-find] .diff-text-inner')
-    .evaluateAll((cells) => cells.map((c) => c.textContent.match(/[A-Za-z_]{3,}/)?.[0]).find(Boolean))
-  assert(word, 'a word to look for')
   try {
+    await native.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
+    const p = await native.newPage()
+    p.on('pageerror', (e) => errors.push(e.message))
+    await p.goto(exportUrl(file), { waitUntil: 'load' })
+    await p.waitForTimeout(1500)
+    const word = await p
+      .locator('.DiffEntry td[data-find] .diff-text-inner')
+      .evaluateAll((cells) => cells.map((c) => c.textContent.match(/[A-Za-z_]{3,}/)?.[0]).find(Boolean))
+    assert(word, 'a word to look for')
     await find(word, p)
   } finally {
     await native.close()
@@ -220,18 +229,26 @@ await check('lines: drag over numbers or from the + selects them (github.com: ro
   try {
     await dragTo(num(a), num(d))
     assert((await sel()) === `R${a}-${d}`, `numbers dragged down: ${await sel()}`)
-    const rowsLit = await t.evaluate((table, [a, d]) => [...table.querySelectorAll('tr.diff-line-row')].filter((tr) => tr.querySelector('td[data-selected="true"]')).every((tr) => [...tr.querySelectorAll('td.new-diff-line-number, td.diff-text-cell')].every((c) => c.dataset.selected === 'true')), [a, d])
-    assert(rowsLit, 'whole rows lit, both sides')
+    // Every row from the first line's to the last one's is lit on both sides, and no other.
+    const lit = await t.evaluate((table, [a, d]) => {
+      const rows = [...table.querySelectorAll('tr.diff-line-row')]
+      const from = rows.findIndex((tr) => tr.dataset.right === String(a))
+      const to = rows.findIndex((tr) => tr.dataset.right === String(d))
+      const on = (tr) => [...tr.querySelectorAll('td.new-diff-line-number, td.diff-text-cell')].every((c) => c.dataset.selected === 'true')
+      const off = (tr) => !tr.querySelector('td[data-selected="true"]')
+      return from >= 0 && to > from && rows.every((tr, i) => (i >= from && i <= to ? on(tr) : off(tr)))
+    }, [a, d])
+    assert(lit, 'whole rows lit, both sides, from the first line to the last')
     assert((await page.evaluate(() => String(getSelection()))) === '', 'no text selected')
     await clear()
     await dragTo(num(d), num(a))
     assert((await sel()) === `R${a}-${d}`, `numbers dragged up: ${await sel()}`)
     await clear()
     // Onto the other side: the selection follows it (github.com: R15 → over L17 selects L15–L17).
-    const left = await t.locator(`tr[data-right="${a}"]`).first().getAttribute('data-left')
-    if (left) {
-      await dragTo(num(a), num(left, 'LEFT'), 40)
-      assert((await sel())?.startsWith(`L${left}-`), `onto the left side: ${await sel()}`)
+    const left = Number(await t.locator(`tr[data-right="${a}"]`).first().getAttribute('data-left'))
+    if (left && (await num(left + 2, 'LEFT').count())) {
+      await dragTo(num(a), num(left + 2, 'LEFT'))
+      assert((await sel()) === `L${left}-${left + 2}`, `onto the left side: ${await sel()}`)
       await clear()
     }
     // The + shows over its own code cell only.

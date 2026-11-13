@@ -554,17 +554,21 @@ function DiffTable(p: TableProps) {
    * click (a second click on a lone selected line clears it).
    */
   const drag = (e: MouseEvent, side: Side, no: number, plus: DiffLine | null) => {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey) return
+    if (e.button !== 0) return
     e.preventDefault() // no text selection while dragging
     if (!plus && e.shiftKey) return onNum(side, no, e)
     // React clears currentTarget once this handler returns.
-    const pressed = (e.currentTarget as Element).closest('tr')
+    const button = e.currentTarget as Element
+    const pressed = button.closest('tr')
     const table = pressed?.closest('table')
     const row = rowNosOf(pressed)
     const lone = !!sel && sel.side === side && sel.start === no && sel.end === no
     if (!plus && !lone) select({ path, side, start: no, end: no })
     let moved = false
+    let last = ''
     const move = (ev: globalThis.MouseEvent) => {
+      // The button came up where this page did not see it (outside the window, a dialog).
+      if (!ev.buttons) return stop()
       const cell = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('td')
       const tr = cell?.closest('tr.diff-line-row')
       if (!cell || !tr || tr.closest('table') !== table) return
@@ -577,19 +581,29 @@ function DiffTable(p: TableProps) {
       if (end == null) return
       if (!moved && s === side && end === no) return
       moved = true
-      select({ path, side: s, start: Math.min(start, end), end: Math.max(start, end) })
+      const next = { path, side: s, start: Math.min(start, end), end: Math.max(start, end) }
+      // Only when it changes: every move would draw the whole table again.
+      const key = `${next.side}${next.start}-${next.end}`
+      if (key !== last) select(next)
+      last = key
     }
-    const up = () => {
+    const stop = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
+      window.removeEventListener('blur', stop)
+    }
+    const up = (ev: globalThis.MouseEvent) => {
+      stop()
       if (plus) {
         const now = useStore.getState().selection
         if (moved && now) compose(now.start === now.end ? { path, side: now.side, line: now.end } : { path, side: now.side, line: now.end, startLine: now.start })
-        else startComment(plus, side)
+        // Pressed and released on the + (a click).
+        else if (!moved && button.contains(ev.target as Node)) startComment(plus, side)
       } else if (!moved && lone) select(null)
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
+    window.addEventListener('blur', stop)
   }
   const startComment = (line: DiffLine, side: Side) => {
     for (const s of ['LEFT', 'RIGHT'] as const) {
@@ -773,7 +787,7 @@ function DiffTable(p: TableProps) {
           const cr = R ? commentContent('RIGHT', R.newNo) : null
           const lk = L ? kindOf(L.type) : 'context'
           const rk = R ? kindOf(R.type) : 'context'
-          const rowSel = selRows ? rowSelected(i, 'RIGHT', null) : false
+          const rowSel = selRows ? rowSelected(i, 'RIGHT', null) : (!!L && isSelected('LEFT', L.oldNo)) || (!!R && isSelected('RIGHT', R.newNo))
           return (
             <Fragment key={r.key}>
               <tr className="diff-line-row" data-left={L?.oldNo ?? undefined} data-right={R?.newNo ?? undefined}>
