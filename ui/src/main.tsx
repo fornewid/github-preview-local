@@ -44,14 +44,21 @@ function keepThePage(kind: Transport['kind']) {
     if (!a) return
     if (href.startsWith('#')) {
       e.preventDefault()
-      history.replaceState(history.state, '', href)
       let id = href.slice(1)
       try {
         id = decodeURIComponent(id)
       } catch {
         // Not encoded after all: the id as written.
       }
-      document.getElementById(id)?.scrollIntoView()
+      const target = document.getElementById(id)
+      // `#` and `#top` go to the top, as in a browser.
+      if (target) target.scrollIntoView()
+      else if (!id || id.toLowerCase() === 'top') window.scrollTo(0, 0)
+      try {
+        history.replaceState(history.state, '', href)
+      } catch {
+        // A page that may not change its address (opened in a sandbox, say): the jump is enough.
+      }
       return
     }
     let url: URL

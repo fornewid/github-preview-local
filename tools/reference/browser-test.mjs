@@ -156,7 +156,8 @@ async function submitWithCloseTab(port, { extraEntry }) {
   await tab.locator('.DiffFileHeader-name a').first().click()
   if (extraEntry) await tab.evaluate(() => history.pushState(null, '', '#elsewhere'))
   const entries = await tab.evaluate(() => history.length)
-  const closed = tab.waitForEvent('close', { timeout: 5000 }).then(() => true, () => false)
+  // Waited for from before the submit (the close may come right after it), long enough for it.
+  const closed = tab.waitForEvent('close', { timeout: 20000 }).then(() => true, () => false)
   await tab.getByRole('button', { name: 'Submit review' }).click()
   await tab.getByRole('textbox', { name: 'Review body' }).fill('Closing review')
   await tab.locator('.ReviewForm-submit').click()
