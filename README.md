@@ -12,8 +12,8 @@ repository does it (or, with `--publish`, gh-prv-local pushes the branch and ope
   context, word-level highlights, GitHub's syntax highlighting (`pl-*`), CODEOWNERS, image files
   (*2-up / Swipe / Onion Skin*), commits that open their own changes, the *Comments* panel, and
   light or dark following the system (an export also takes `?theme=dark_dimmed`,
-  `light_high_contrast`, …). Cmd/Ctrl + F finds text in all the changes, also in files not
-  rendered yet.
+  `light_high_contrast`, …). In a browser tab Cmd/Ctrl + F is the browser's find, as on
+  github.com; the native window has its own, which also finds text in files not rendered yet.
 - **Only what a local review needs**: no pull request description or *Merge status* panel; the
   title and the tabs stay in place on every tab.
 - **Any window size and zoom**: from a phone-sized 320px window to 4K, the page changes layout at
@@ -49,9 +49,9 @@ repository does it (or, with `--publish`, gh-prv-local pushes the branch and ope
 
 ![Running the local checks from the Checks tab](docs/images/checks.gif)
 
-**Split or unified, every theme, the file tree, and find in the changes.**
+**Split or unified, every theme, and the file tree.**
 
-![Switching to split view in the dark theme, opening a file from the tree and finding a word](docs/images/views.gif)
+![Switching to split view in the dark theme and opening a file from the tree](docs/images/views.gif)
 
 **Any window size, laid out the way github.com does.**
 
@@ -127,8 +127,9 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
 
 ### Reviewing
 
-- Hover a line and click **+** to comment; click line numbers (shift-click for a range) to comment
-  on several lines; the comment button in a file header comments on the whole file. The comment box
+- Hover a line and click **+** to comment. For several lines, drag from the first line's **+** to
+  the last, or select them (drag over the line numbers, or click one and shift-click another) and
+  click the last line's **+**. The comment button in a file header comments on the whole file. The comment box
   has GitHub's formatting toolbar, including *suggestions*.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the review is printed to stdout and gh-prv-local ends (the window
@@ -142,8 +143,9 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
     the branch conflicts with the base branch.
 - *All commits* → *Changes since your last review* shows only the commits added since you last
   submitted a review. A commit's title (in *Commits* or *Conversation*) shows just that commit.
-- Cmd/Ctrl + F opens a find bar: Enter / Shift+Enter (or Cmd/Ctrl + G) go through the matches,
-  opening collapsed files on the way; Escape closes it.
+- Cmd/Ctrl + F: the browser's find in a browser tab. The native window opens its own find bar:
+  Enter / Shift+Enter (or Cmd/Ctrl + G) go through the matches, opening collapsed files on the
+  way; Escape closes it.
 - Pending comments, *Viewed* state and the last review are saved in `.git/gh-prv-local/` (never committed).
 - *Open in editor* (a file's menu) uses `GH_PRV_LOCAL_EDITOR` (a GUI editor command, such as
   `subl`: it opens without a terminal), else VS Code's `code`, else the system's text editor.

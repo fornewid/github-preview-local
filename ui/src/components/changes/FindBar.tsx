@@ -17,9 +17,9 @@ const letter = (e: KeyboardEvent, l: string) => {
 const same = (a: FindMatch, b: FindMatch) => a.path === b.path && a.cell === b.cell && a.nth === b.nth
 
 /**
- * Cmd/Ctrl+F: a find bar like a browser's (the window has none of its own, and an export's diffs
- * are not all on the page, so the browser's would miss most of them). Enter / Cmd+G go to the next
- * match, Shift+Enter / Shift+Cmd+G to the previous one, Escape closes.
+ * Cmd/Ctrl+F in the native window, which has no find bar of its own: one like a browser's, which
+ * also finds text in files not drawn yet. Enter / Cmd+G go to the next match, Shift+Enter /
+ * Shift+Cmd+G to the previous one, Escape closes. A browser tab keeps the browser's find.
  */
 export function FindBar({ files }: { files: FileDiff[] }) {
   const [open, setOpen] = useState(false)

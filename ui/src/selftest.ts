@@ -125,9 +125,11 @@ async function menuCheck() {
   return { ...r, ok: r.clientWidth > 0 && r.scrollWidth <= r.clientWidth }
 }
 
-/** Cmd+F finds a word of the first diff line, paints the matches and marks the current one. */
+/** Cmd+F finds a word of the first diff line that has one, paints the matches and marks the current one. */
 async function findCheck() {
-  const word = ($('.DiffEntry td[data-find] .diff-text-inner')?.textContent ?? '').match(/[A-Za-z_]{3,}/)?.[0]
+  const word = [...document.querySelectorAll('.DiffEntry td[data-find] .diff-text-inner')]
+    .map((c) => c.textContent?.match(/[A-Za-z_]{3,}/)?.[0])
+    .find(Boolean)
   if (!word) return { ok: false, error: 'no code to search' }
   const mac = /Mac/.test(navigator.platform)
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', metaKey: mac, ctrlKey: !mac, bubbles: true }))

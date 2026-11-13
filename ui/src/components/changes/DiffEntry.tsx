@@ -485,6 +485,25 @@ function snippetFrom(rows: Array<UnifiedRow | SplitViewRow>, side: Side, start: 
   return out.slice(0, 40)
 }
 
+type RowNos = Record<Side, number | null>
+
+/** A diff row's line numbers on each side (none on a side the row has no line on). */
+function rowNos(r: SplitViewRow | UnifiedRow): RowNos {
+  if (r.kind === 'split') return { LEFT: r.left?.oldNo ?? null, RIGHT: r.right?.newNo ?? null }
+  if (r.kind === 'line') {
+    const l = r.line
+    return { LEFT: l.type === 'add' ? null : l.oldNo, RIGHT: l.type === 'del' ? null : l.newNo }
+  }
+  return { LEFT: null, RIGHT: null }
+}
+
+/** The same, from a rendered row (`data-left` / `data-right`). */
+function rowNosOf(tr: Element | null): RowNos {
+  const n = (v: string | undefined) => (v ? Number(v) : null)
+  const d = (tr as HTMLElement | null)?.dataset
+  return { LEFT: n(d?.left), RIGHT: n(d?.right) }
+}
+
 function expanderLabel(e: Expander, r: HunkRow) {
   if (e === 'up') return `Expand file up from line ${r.nextStart}`
   if (e === 'down') return `Expand file down from line ${r.prevEnd}`
@@ -510,12 +529,67 @@ function DiffTable(p: TableProps) {
   )
   const isSelected = (side: Side, no: number | null) => !!sel && no != null && sel.side === side && no >= sel.start && no <= sel.end
   const split = p.view === 'split'
+  // Selected lines are shown as whole rows from the first to the last (both sides, and rows of the
+  // other side in between), like github.com.
+  const selRows = useMemo(() => {
+    if (!sel) return null
+    const at = (no: number) => rows.findIndex((r) => rowNos(r)[sel.side] === no)
+    const first = at(sel.start)
+    const last = at(sel.end)
+    return first < 0 || last < 0 ? null : [first, last]
+  }, [sel, rows])
+  const rowSelected = (i: number, side: Side, no: number | null) => (selRows ? i >= selRows[0] && i <= selRows[1] : isSelected(side, no))
 
   const onNum = (side: Side, no: number | null, e: MouseEvent) => {
     if (no == null) return
     if (e.shiftKey && sel && sel.side === side) select({ path, side, start: Math.min(sel.start, no), end: Math.max(sel.end, no) })
     else if (sel && sel.side === side && sel.start === no && sel.end === no) select(null)
     else select({ path, side, start: no, end: no })
+  }
+
+  /**
+   * Pressing a line number, or a line's +, and dragging to another line selects those lines, like
+   * github.com: on the side of the line under the pointer, from the pressed row. Released, a drag
+   * from the + opens the comment form for them; a number pressed and released in place works like a
+   * click (a second click on a lone selected line clears it).
+   */
+  const drag = (e: MouseEvent, side: Side, no: number, plus: DiffLine | null) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey) return
+    e.preventDefault() // no text selection while dragging
+    if (!plus && e.shiftKey) return onNum(side, no, e)
+    // React clears currentTarget once this handler returns.
+    const pressed = (e.currentTarget as Element).closest('tr')
+    const table = pressed?.closest('table')
+    const row = rowNosOf(pressed)
+    const lone = !!sel && sel.side === side && sel.start === no && sel.end === no
+    if (!plus && !lone) select({ path, side, start: no, end: no })
+    let moved = false
+    const move = (ev: globalThis.MouseEvent) => {
+      const cell = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('td')
+      const tr = cell?.closest('tr.diff-line-row')
+      if (!cell || !tr || tr.closest('table') !== table) return
+      const nos = rowNosOf(tr)
+      const over = (cell.dataset.side as Side | undefined) ?? side
+      // The other side if this row and the pressed one have lines there, else the pressed side.
+      const s = row[over] != null && nos[over] != null ? over : side
+      const start = s === side ? no : row[s]!
+      const end = nos[s]
+      if (end == null) return
+      if (!moved && s === side && end === no) return
+      moved = true
+      select({ path, side: s, start: Math.min(start, end), end: Math.max(start, end) })
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      if (plus) {
+        const now = useStore.getState().selection
+        if (moved && now) compose(now.start === now.end ? { path, side: now.side, line: now.end } : { path, side: now.side, line: now.end, startLine: now.start })
+        else startComment(plus, side)
+      } else if (!moved && lone) select(null)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
   }
   const startComment = (line: DiffLine, side: Side) => {
     for (const s of ['LEFT', 'RIGHT'] as const) {
@@ -545,27 +619,28 @@ function DiffTable(p: TableProps) {
     )
   }
 
-  /** A line number cell showing `no`; a click selects line `target` (unified rows select across sides). */
+  /** A line number cell showing `no`; pressing it selects line `target` (unified rows select across sides). */
   const numCell = (kind: LineKind, no: number | null, selected: boolean, target: [Side, number | null], extra = '') => (
     <td
       className={`new-diff-line-number ${kind === 'context' ? 'diff-line-number-neutral' : ''} ${no == null ? 'empty-diff-line' : ''} ${extra}`}
       data-line-number={no ?? undefined}
+      data-side={target[0]}
       data-selected={selected}
       style={{ backgroundColor: NUM_BG[kind] }}
-      onClick={(e) => onNum(target[0], target[1], e)}
+      onMouseDown={(e) => target[1] != null && drag(e, target[0], target[1], null)}
     >
       {no}
     </td>
   )
 
-  const codeCell = (line: DiffLine, side: Side, words: Range[] | null | undefined, sideClass: string) => {
+  const codeCell = (line: DiffLine, side: Side, words: Range[] | null | undefined, sideClass: string, selected: boolean) => {
     const no = side === 'LEFT' ? line.oldNo : line.newNo
     const kind = kindOf(line.type)
     const runs = runsFor(line, side, p.hlOld, p.hlNew)
-    const selected = split ? isSelected(side, no) : isSelected('LEFT', line.oldNo) || isSelected('RIGHT', line.newNo)
     return (
       <td
         className={`diff-text-cell ${sideClass}`}
+        data-side={side}
         // Find in the diff (find.ts) counts the hunks' lines; revealed context is not counted.
         data-find={no != null && !line.expanded ? `${side}:${no}` : undefined}
         data-selected={selected}
@@ -588,7 +663,9 @@ function DiffTable(p: TableProps) {
               type="button"
               className="addCommentButton-button"
               aria-label="Add comment"
-              onClick={() => startComment(line, side)}
+              onMouseDown={(e) => drag(e, side, no, line)}
+              // From the keyboard (a click by mouse is the press above).
+              onClick={(e) => e.detail === 0 && startComment(line, side)}
             >
               <PlusIcon size={16} />
             </button>
@@ -633,7 +710,7 @@ function DiffTable(p: TableProps) {
           <col />
         </colgroup>
         <tbody>
-          {(rows as UnifiedRow[]).map((r) => {
+          {(rows as UnifiedRow[]).map((r, i) => {
             if (r.kind === 'hunk')
               return (
                 <tr key={r.key} className="diff-line-row">
@@ -647,18 +724,20 @@ function DiffTable(p: TableProps) {
             const rightTarget: [Side, number | null] = l.newNo != null && l.type !== 'del' ? ['RIGHT', l.newNo] : ['LEFT', l.oldNo]
             const cl = l.type !== 'add' ? commentContent('LEFT', l.oldNo) : null
             const cr = l.type !== 'del' ? commentContent('RIGHT', l.newNo) : null
-            const selected = isSelected('LEFT', l.oldNo) || isSelected('RIGHT', l.newNo)
+            const nos = rowNos(r)
+            const selected = selRows ? rowSelected(i, side, null) : isSelected('LEFT', l.oldNo) || isSelected('RIGHT', l.newNo)
             return (
               <Fragment key={r.key}>
-                <tr className="diff-line-row">
+                <tr className="diff-line-row" data-left={nos.LEFT ?? undefined} data-right={nos.RIGHT ?? undefined}>
                   {numCell(kind, l.type === 'add' ? null : l.oldNo, selected, leftTarget)}
                   {numCell(kind, l.type === 'del' ? null : l.newNo, selected, rightTarget)}
-                  {codeCell(l, side, r.words, 'left-side')}
+                  {codeCell(l, side, r.words, 'left-side', selected)}
                 </tr>
                 {(cl || cr) && (
+                  // Part of its line's row on github.com: selected with it.
                   <tr className="diff-comment-row">
-                    <td colSpan={2} className="new-diff-line-number" style={{ backgroundColor: NUM_BG[kind] }} />
-                    <td className="diff-comment-cell" style={{ backgroundColor: LINE_BG[kind] }}>
+                    <td colSpan={2} className="new-diff-line-number" data-selected={selected} style={{ backgroundColor: NUM_BG[kind] }} />
+                    <td className="diff-comment-cell" data-selected={selected} style={{ backgroundColor: LINE_BG[kind] }}>
                       {cl}
                       {cr}
                     </td>
@@ -681,7 +760,7 @@ function DiffTable(p: TableProps) {
         <col />
       </colgroup>
       <tbody>
-        {(rows as SplitViewRow[]).map((r) => {
+        {(rows as SplitViewRow[]).map((r, i) => {
           if (r.kind === 'hunk')
             return (
               <tr key={r.key} className="diff-line-row">
@@ -694,48 +773,50 @@ function DiffTable(p: TableProps) {
           const cr = R ? commentContent('RIGHT', R.newNo) : null
           const lk = L ? kindOf(L.type) : 'context'
           const rk = R ? kindOf(R.type) : 'context'
+          const rowSel = selRows ? rowSelected(i, 'RIGHT', null) : false
           return (
             <Fragment key={r.key}>
-              <tr className="diff-line-row">
+              <tr className="diff-line-row" data-left={L?.oldNo ?? undefined} data-right={R?.newNo ?? undefined}>
                 {L ? (
                   <>
-                    {numCell(lk, L.oldNo, isSelected('LEFT', L.oldNo), ['LEFT', L.oldNo], 'left-side')}
-                    {codeCell(L, 'LEFT', r.leftWords, 'left-side-diff-cell')}
+                    {numCell(lk, L.oldNo, rowSelected(i, 'LEFT', L.oldNo), ['LEFT', L.oldNo], 'left-side')}
+                    {codeCell(L, 'LEFT', r.leftWords, 'left-side-diff-cell', rowSelected(i, 'LEFT', L.oldNo))}
                   </>
                 ) : (
                   <>
-                    <td className="empty-diff-line left-side" />
-                    <td className="empty-diff-line left-side" />
+                    <td className="empty-diff-line left-side" data-side="LEFT" />
+                    <td className="empty-diff-line left-side" data-side="LEFT" />
                   </>
                 )}
                 {R ? (
                   <>
-                    {numCell(rk, R.newNo, isSelected('RIGHT', R.newNo), ['RIGHT', R.newNo], 'right-side')}
-                    {codeCell(R, 'RIGHT', r.rightWords, 'right-side-diff-cell')}
+                    {numCell(rk, R.newNo, rowSelected(i, 'RIGHT', R.newNo), ['RIGHT', R.newNo], 'right-side')}
+                    {codeCell(R, 'RIGHT', r.rightWords, 'right-side-diff-cell', rowSelected(i, 'RIGHT', R.newNo))}
                   </>
                 ) : (
                   <>
-                    <td className="empty-diff-line" />
-                    <td className="empty-diff-line" />
+                    <td className="empty-diff-line" data-side="RIGHT" />
+                    <td className="empty-diff-line" data-side="RIGHT" />
                   </>
                 )}
               </tr>
               {(cl || cr) && (
+                // Part of its line's row on github.com: selected with it, both sides.
                 <tr className="diff-comment-row">
-                  {cl ? (
+                  {cl || rowSel ? (
                     <>
-                      <td className="new-diff-line-number" style={{ backgroundColor: NUM_BG[lk] }} />
-                      <td className="diff-comment-cell" style={{ backgroundColor: LINE_BG[lk] }}>
+                      <td className="new-diff-line-number" data-selected={rowSel} style={{ backgroundColor: NUM_BG[lk] }} />
+                      <td className="diff-comment-cell" data-selected={rowSel} style={{ backgroundColor: LINE_BG[lk] }}>
                         {cl}
                       </td>
                     </>
                   ) : (
                     <td colSpan={2} className="empty-diff-line" />
                   )}
-                  {cr ? (
+                  {cr || rowSel ? (
                     <>
-                      <td className="new-diff-line-number" style={{ backgroundColor: NUM_BG[rk] }} />
-                      <td className="diff-comment-cell" style={{ backgroundColor: LINE_BG[rk] }}>
+                      <td className="new-diff-line-number" data-selected={rowSel} style={{ backgroundColor: NUM_BG[rk] }} />
+                      <td className="diff-comment-cell" data-selected={rowSel} style={{ backgroundColor: LINE_BG[rk] }}>
                         {cr}
                       </td>
                     </>

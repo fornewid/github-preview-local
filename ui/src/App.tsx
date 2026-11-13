@@ -123,6 +123,9 @@ function FilesTab({ warnings }: { warnings: string[] }) {
   const viewed = useStore((st) => st.viewed)
   const treeVisible = useStore((st) => st.settings.treeVisible)
   const treeDialog = useStore((st) => st.treeDialog)
+  // Cmd/Ctrl+F: a browser tab (and an export) keeps the browser's own find, as on github.com; the
+  // native window has none, so it gets gh-prv-local's.
+  const native = useStore((st) => st.transport?.kind === 'native')
   // Wide enough: the tree sits beside the diffs (if shown); otherwise it opens as a dialog.
   const treePane = useTreeBeside()
   useEffect(() => {
@@ -142,7 +145,7 @@ function FilesTab({ warnings }: { warnings: string[] }) {
       <div className="ChangesToolbar-wrapper">
         <ChangesToolbar />
       </div>
-      <FindBar files={shown} />
+      {native && <FindBar files={shown} />}
       {!treePane && treeDialog && <FileTreeDialog files={shown} all={files} />}
       {treePane && treeVisible && (
         <PageLayout.Pane

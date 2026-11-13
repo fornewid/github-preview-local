@@ -113,5 +113,6 @@ media queries without a `change` event, so gh-prv-local also re-checks on `resiz
 - A jump within the page (a file name in its header, `#…` links) replaces the address instead of
   adding a history entry as github.com does: a browser lets a tab close itself only while it has a
   single entry, which *Don't show this again* (after a review is submitted in a tab) needs.
-- Find (Cmd/Ctrl + F): github.com leaves it to the browser; here the diffs are not all on the page
-  and the native window has no find bar, so gh-prv-local has its own (a browser's colors).
+- Find (Cmd/Ctrl + F) in the native window: github.com leaves it to the browser, and so does a
+  browser tab here; the native window has no find bar, so it gets gh-prv-local's own (a browser's
+  colors), which also finds text in diffs not on the page yet.

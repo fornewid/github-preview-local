@@ -164,18 +164,105 @@ await check('settings menu fits its content (no scrollbar inside it)', async () 
   await settle(300)
 })
 
-await check('find (Cmd/Ctrl+F): counts every match, paints the ones on screen, goes to the next, Escape closes', async () => {
-  const word = await page
+await check("find (Cmd/Ctrl+F): a browser tab or an export leaves it to the browser's find", async () => {
+  await page.evaluate(() => addEventListener('keydown', (e) => (window.__prvFindKey = e.defaultPrevented), { once: true }))
+  await page.keyboard.press('ControlOrMeta+f')
+  await settle(200)
+  assert((await page.locator('.FindBar').count()) === 0 && (await page.evaluate(() => window.__prvFindKey)) === false, 'not taken from the browser')
+})
+
+await check('find in the window (fake bridge): counts every match, paints the ones on screen, goes to the next, Escape closes', async () => {
+  const native = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+  await native.addInitScript({ path: fileURLToPath(new URL('./fake-native.js', import.meta.url)) })
+  const p = await native.newPage()
+  p.on('pageerror', (e) => errors.push(e.message))
+  await p.goto(exportUrl(file), { waitUntil: 'load' })
+  await p.waitForTimeout(1500)
+  const word = await p
     .locator('.DiffEntry td[data-find] .diff-text-inner')
     .evaluateAll((cells) => cells.map((c) => c.textContent.match(/[A-Za-z_]{3,}/)?.[0]).find(Boolean))
   assert(word, 'a word to look for')
   try {
-    await find(word)
+    await find(word, p)
   } finally {
-    if (await page.locator('.FindBar').count()) await page.getByRole('button', { name: 'Close find' }).click()
+    await native.close()
   }
 })
-async function find(word) {
+
+await check('lines: drag over numbers or from the + selects them (github.com: rows, either side), the + opens their comment', async () => {
+  const t = first().locator('table')
+  const lines = await t.evaluate((table) => {
+    const nums = [...table.querySelectorAll('td.new-diff-line-number[data-side="RIGHT"][data-line-number]')].map((c) => +c.dataset.lineNumber)
+    for (let i = 0; i + 3 < nums.length; i++) if ([1, 2, 3].every((k) => nums[i + k] === nums[i] + k)) return [nums[i], nums[i + 3]]
+    return null
+  })
+  assert(lines, 'four lines in a row')
+  const [a, d] = lines
+  const num = (n, side = 'RIGHT') => t.locator(`td.new-diff-line-number[data-side="${side}"][data-line-number="${n}"]`).first()
+  const codeAt = (n) => t.locator(`tr[data-right="${n}"] td.diff-text-cell[data-side="RIGHT"]`).first()
+  const center = async (loc) => {
+    await loc.scrollIntoViewIfNeeded()
+    const b = await loc.boundingBox()
+    return [b.x + b.width / 2, b.y + b.height / 2]
+  }
+  const dragTo = async (from, to, dy = 0) => {
+    const [x, y] = await center(from)
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    const [x2, y2] = await center(to)
+    await page.mouse.move(from === to ? x : x2, y2 + dy, { steps: 8 })
+    await page.mouse.up()
+    await settle(300)
+  }
+  const sel = () => page.evaluate(() => { const s = window.__prv.getState().selection; return s && `${s.side[0]}${s.start}-${s.end}` })
+  const clear = () => page.evaluate(() => window.__prv.getState().select(null))
+  const entries = await page.evaluate(() => history.length)
+  try {
+    await dragTo(num(a), num(d))
+    assert((await sel()) === `R${a}-${d}`, `numbers dragged down: ${await sel()}`)
+    const rowsLit = await t.evaluate((table, [a, d]) => [...table.querySelectorAll('tr.diff-line-row')].filter((tr) => tr.querySelector('td[data-selected="true"]')).every((tr) => [...tr.querySelectorAll('td.new-diff-line-number, td.diff-text-cell')].every((c) => c.dataset.selected === 'true')), [a, d])
+    assert(rowsLit, 'whole rows lit, both sides')
+    assert((await page.evaluate(() => String(getSelection()))) === '', 'no text selected')
+    await clear()
+    await dragTo(num(d), num(a))
+    assert((await sel()) === `R${a}-${d}`, `numbers dragged up: ${await sel()}`)
+    await clear()
+    // Onto the other side: the selection follows it (github.com: R15 → over L17 selects L15–L17).
+    const left = await t.locator(`tr[data-right="${a}"]`).first().getAttribute('data-left')
+    if (left) {
+      await dragTo(num(a), num(left, 'LEFT'), 40)
+      assert((await sel())?.startsWith(`L${left}-`), `onto the left side: ${await sel()}`)
+      await clear()
+    }
+    // The + shows over its own code cell only.
+    await codeAt(a).hover()
+    await settle(200)
+    const plusShown = await page.locator('.addCommentButton-button').evaluateAll((bs) => bs.filter((b) => b.getBoundingClientRect().width > 0).length)
+    assert(plusShown === 1, `one + shown: ${plusShown}`)
+    // From the + on the first line to the fourth: their comment opens.
+    await codeAt(a).hover()
+    const plus = codeAt(a).locator('.addCommentButton-button')
+    const [px, py] = await center(plus)
+    await page.mouse.move(px, py)
+    await page.mouse.down()
+    const [, y4] = await center(codeAt(d))
+    await page.mouse.move(px, y4, { steps: 8 })
+    await page.mouse.up()
+    await settle(400)
+    assert(await page.getByText(`Add a comment on lines R${a} to R${d}`).isVisible(), 'the comment form for the lines')
+    assert((await page.locator('.diff-comment-row td.diff-comment-cell[data-selected="true"]').count()) > 0, "the form's row is lit with its lines")
+    await page.getByRole('button', { name: 'Cancel' }).first().click()
+    await settle(300)
+    assert((await page.evaluate(() => history.length)) === entries, 'no history entries')
+  } finally {
+    await clear()
+    const cancel = page.getByRole('button', { name: 'Cancel' })
+    if (await cancel.count()) await cancel.first().click()
+  }
+})
+
+async function find(word, page) {
+  const settle = (ms = 250) => page.waitForTimeout(ms)
   await page.keyboard.press('ControlOrMeta+f')
   await settle(200)
   assert(await page.getByRole('textbox', { name: 'Find in changes' }).evaluate((e) => e === document.activeElement), 'focus in the find bar')

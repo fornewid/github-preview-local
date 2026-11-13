@@ -150,7 +150,7 @@ await scene(
   { native: true },
 )
 
-// 3. Views (dark theme): unified ↔ split, a file from the tree, find in the changes.
+// 3. Views (dark theme): unified ↔ split, a file from the tree (find is the browser's in a tab).
 await scene(
   'views',
   { treeVisible: true, diffView: 'unified' },
@@ -162,16 +162,7 @@ await scene(
     await click(page, page.getByRole('menuitemradio', { name: 'Split' }))
     await pause(page, 1200)
     await click(page, page.locator('.FileTreePane [role="treeitem"]').last())
-    await pause(page, 1200)
-    await page.keyboard.press('ControlOrMeta+f')
-    await pause(page, 400)
-    await page.keyboard.type('remember', { delay: 60 })
-    await pause(page, 900)
-    for (let i = 0; i < 2; i++) {
-      await page.keyboard.press('Enter')
-      await pause(page, 800)
-    }
-    await pause(page, 600)
+    await pause(page, 2000)
   },
   { scheme: 'dark' },
 )
