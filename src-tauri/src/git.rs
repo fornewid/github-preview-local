@@ -160,7 +160,7 @@ pub struct DiffEnds {
 }
 
 /// The only remote gh-prv-local talks to (fetching the base, pushing, the pull request on its GitHub host):
-/// `origin`. Without one, the base is compared as it is locally and Confirm is unavailable.
+/// `origin`. Without one, the base is compared as it is locally and Confirm cannot push (`--publish`).
 pub fn pick_remote(git: &Git) -> Option<String> {
     let remotes = git.run(&["remote"]).ok()?;
     remotes.lines().map(str::trim).any(|r| r == "origin").then(|| "origin".to_string())

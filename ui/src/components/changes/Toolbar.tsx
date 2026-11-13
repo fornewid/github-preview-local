@@ -533,7 +533,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
               {range.from
                 ? 'Switch back to all commits to confirm.'
                 : !s.publish
-                  ? `Submit feedback and approve these changes for a pull request into ${s.base.name}.`
+                  ? `Submit feedback and approve these changes. Your agent opens the pull request into ${s.base.name}.`
                   : !canPublish
                     ? 'Needs `gh-prv-local` running (not an export).'
                     : pr
@@ -541,9 +541,14 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
                       : `Push ${s.head.name} and open a pull request into ${s.base.name}.`}
             </FormControl.Caption>
           </FormControl>
-          {event === 'CONFIRM' && !publishing && checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && (
+          {event === 'CONFIRM' && !publishing && (s.dirty || (checks.total > 0 && (checks.failed > 0 || checks.idle > 0))) && (
             <div className="ReviewForm-confirm">
-              <ChecksWarning checks={checks} />
+              {s.dirty && (
+                <Flash variant="warning">
+                  <AlertIcon size={16} /> You have uncommitted changes. The pull request gets only what is committed.
+                </Flash>
+              )}
+              {checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && <ChecksWarning checks={checks} />}
             </div>
           )}
           {publishing && (

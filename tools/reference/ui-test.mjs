@@ -526,7 +526,7 @@ await check('Confirm: an approval for the agent, or with --publish a push and a 
       assert(/Push .+ and open a pull request into/.test(caption), `caption: ${caption}`)
       assert(titled === 1 && button.startsWith('Confirm and create pull request'), `title field ${titled}, button ${button}`)
     } else {
-      assert(/approve these changes for a pull request into/.test(caption), `caption: ${caption}`)
+      assert(/approve these changes. Your agent opens the pull request into/.test(caption), `caption: ${caption}`)
       assert(titled === 0 && button.startsWith('Submit review'), `title field ${titled}, button ${button}`)
     }
     await native.close()

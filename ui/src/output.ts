@@ -53,11 +53,18 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
           ? `The reviewer confirmed the changes. Branch \`${r.head.name}\` was pushed and a ${r.publish.draft ? 'draft ' : ''}pull request was opened: ${r.publish.url}`
           : `The reviewer confirmed the changes. Branch \`${r.head.name}\` was pushed to the existing pull request: ${r.publish.url}`,
       )
-    } else
+    } else {
       out.push(
         `The reviewer confirmed the changes. Nothing was pushed: push \`${r.head.name}\` and open the pull request into \`${r.base.name}\` ` +
           'the way this repository does it (its title rules, description, labels, reviewers).',
       )
+      if (s.dirty)
+        out.push(
+          '',
+          `The working tree has uncommitted changes${s.mode === 'worktree' ? ' (they were part of this review)' : ''}: ` +
+            'commit what belongs in the pull request before pushing.',
+        )
+    }
   } else if (r.event === 'REQUEST_CHANGES') {
     out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again (same options) for the next review.')
   } else {
