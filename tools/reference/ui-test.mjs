@@ -535,13 +535,18 @@ await check('Confirm: an approval for the agent, or with --publish a push and a 
   const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => errors.push(e.message))
   await openExport(p, file, { wait: 1500 })
+  // Uncommitted changes in the working tree: the form and the result say they are not in the branch.
+  await p.evaluate(() => window.__prv.setState((st) => ({ snapshot: { ...st.snapshot, dirty: true } })))
   await p.getByRole('button', { name: 'Submit review' }).click()
   await p.waitForTimeout(300)
   await p.getByRole('radio', { name: 'Confirm' }).check()
+  await p.waitForTimeout(200)
+  assert(/You have uncommitted changes\. The pull request gets only what is committed\./.test(await p.locator('.ReviewForm').innerText()), 'uncommitted warning')
   await p.locator('.ReviewForm-submit').click()
   await p.waitForTimeout(800)
   const md = await p.locator('.SubmittedDialog pre').innerText()
   assert(/# Pull request preview: Confirmed/.test(md) && /Nothing was pushed: push `.+` and open the pull request into `.+` the way this repository does it/.test(md), md.slice(0, 300))
+  assert(/The working tree has uncommitted changes: commit what belongs in the pull request before pushing\./.test(md), 'uncommitted note in the result')
   await p.close()
 })
 

@@ -66,11 +66,11 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
         )
     }
   } else if (r.event === 'REQUEST_CHANGES') {
-    out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again (same options) for the next review.')
+    out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again (the same command line) for the next review.')
   } else {
     out.push(
       'The reviewer left comments. Consider each one; reply in your summary if you decide not to change something. ' +
-        'Then run `gh-prv-local` again (same options) for the next review.',
+        'Then run `gh-prv-local` again (the same command line) for the next review.',
     )
   }
   if (r.body.trim()) {

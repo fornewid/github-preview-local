@@ -29,8 +29,8 @@ window). Review rounds repeat until the user confirms or stops:
 - **Closed without a review**: the user stopped; acknowledge and continue; do not change anything.
 - **Not opened**: no page opened the review within 10 minutes; the rounds end. Tell the user; offer
   to run it again.
+- **`gh-prv-local: command not found`**: the CLI is not installed. Point the user to the install
+  steps: https://github.com/fornewid/github-preview-local#install
 
 With `--format json` the outcome is the `event` field: `REQUEST_CHANGES`, `COMMENT`, `CONFIRM`
 (`publish` set when it pushed), `CLOSED` or `NOT_OPENED`.
-- **`gh-prv-local: command not found`**: the CLI is not installed. Point the user to the install
-  steps: https://github.com/fornewid/github-preview-local#install
