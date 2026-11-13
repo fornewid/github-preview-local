@@ -107,5 +107,8 @@ media queries without a `change` event, so gh-prv-local also re-checks on `resiz
 - Popups are roomier when the window has room: the commit picker is as wide as its longest commit
   title (480px, github.com's width, up to 960px) and menus are at least 256px (github.com: 192px,
   or as wide as their items).
+- A jump within the page (a file name in its header, `#…` links) replaces the address instead of
+  adding a history entry as github.com does: a browser lets a tab close itself only while it has a
+  single entry, which *Don't show this again* (after a review is submitted in a tab) needs.
 - Find (Cmd/Ctrl + F): github.com leaves it to the browser; here the diffs are not all on the page
   and the native window has no find bar, so gh-prv-local has its own (a browser's colors).

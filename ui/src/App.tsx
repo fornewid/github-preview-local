@@ -1,5 +1,5 @@
 import { Component, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Button, Flash, PageLayout, ThemeProvider } from '@primer/react'
+import { Button, Checkbox, Flash, FormControl, PageLayout, ThemeProvider } from '@primer/react'
 import { useShallow } from 'zustand/react/shallow'
 import { panelLayout, useStore } from './store'
 import { AppHeader, PullHeader } from './components/PageHeader'
@@ -247,17 +247,7 @@ function SubmittedDialog() {
   const kind = useStore((st) => st.transport?.kind)
   if (!submitted || kind === 'native') return null
   // A browser tab: the review went to gh-prv-local, which printed it and ended (like the window closing).
-  if (kind === 'browser')
-    return (
-      <div className="SubmittedDialog-backdrop">
-        <div className="SubmittedDialog" role="dialog" aria-modal aria-labelledby="submitted-title">
-          <header id="submitted-title">Review submitted</header>
-          <div className="SubmittedDialog-body SubmittedDialog-note">
-            gh-prv-local printed it to the terminal{submitted.result.publish ? ' and pushed the branch' : ''}. You can close this tab.
-          </div>
-        </div>
-      </div>
-    )
+  if (kind === 'browser') return <TabDone pushed={!!submitted.result.publish} />
   return (
     <div className="SubmittedDialog-backdrop">
       <div className="SubmittedDialog" role="dialog" aria-modal aria-labelledby="submitted-title">
@@ -271,6 +261,43 @@ function SubmittedDialog() {
             Copy to clipboard
           </Button>
         </footer>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A browser tab whose review went out: it says so, or closes itself if "Don't show this again" was
+ * on when the review went out. A browser closes only a tab with a single history entry (or one a
+ * script opened); when it keeps this one, the dialog shows after all.
+ */
+function TabDone({ pushed }: { pushed: boolean }) {
+  const closeTab = useStore((st) => st.settings.closeTab)
+  // As it was when the review went out (ticking it now applies from the next review).
+  const [tried] = useState(closeTab)
+  const [shown, setShown] = useState(!tried)
+  useEffect(() => {
+    if (!tried) return
+    window.close()
+    const kept = setTimeout(() => setShown(!window.closed), 300)
+    return () => clearTimeout(kept)
+  }, [tried])
+  if (!shown) return null
+  return (
+    <div className="SubmittedDialog-backdrop">
+      <div className="SubmittedDialog" role="dialog" aria-modal aria-labelledby="submitted-title">
+        <header id="submitted-title">Review submitted</header>
+        <div className="SubmittedDialog-body SubmittedDialog-note">
+          <p>
+            gh-prv-local printed it to the terminal{pushed ? ' and pushed the branch' : ''}.{' '}
+            {tried ? 'The browser did not let this tab close itself; close it yourself.' : 'You can close this tab.'}
+          </p>
+          <FormControl>
+            <Checkbox checked={closeTab} onChange={(e) => useStore.getState().applySettings({ closeTab: e.target.checked })} />
+            <FormControl.Label>Don't show this again</FormControl.Label>
+            <FormControl.Caption>Next time, this tab closes as soon as the review is submitted.</FormControl.Caption>
+          </FormControl>
+        </div>
       </div>
     </div>
   )

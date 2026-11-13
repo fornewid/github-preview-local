@@ -32,13 +32,28 @@ createRoot(document.getElementById('root')!).render(
  * Links never take the review away: other sites open in a new tab (the native window hands them to
  * the browser itself), and paths relative to this page (in a comment, say) do nothing. In a browser
  * tab, leaving with a review being written asks first.
+ *
+ * A jump within the page (a file name, `#…`) replaces the address instead of adding a history
+ * entry as github.com does: a browser lets a tab close itself only while it has one (issue #18).
  */
 function keepThePage(kind: Transport['kind']) {
   document.addEventListener('click', (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return
     const a = (e.target as Element | null)?.closest?.('a[href]')
     const href = a?.getAttribute('href') ?? ''
-    if (!a || href.startsWith('#')) return
+    if (!a) return
+    if (href.startsWith('#')) {
+      e.preventDefault()
+      history.replaceState(history.state, '', href)
+      let id = href.slice(1)
+      try {
+        id = decodeURIComponent(id)
+      } catch {
+        // Not encoded after all: the id as written.
+      }
+      document.getElementById(id)?.scrollIntoView()
+      return
+    }
     let url: URL
     try {
       url = new URL(href, location.href)

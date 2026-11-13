@@ -127,7 +127,7 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
   has GitHub's formatting toolbar, including *suggestions*.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the review is printed to stdout and gh-prv-local ends (the window
-    closes; a tab says it is done).
+    closes; a tab says it is done, or with *Don't show this again* ticked closes itself).
   - *Confirm*: edit the PR title / description (prefilled from the commit or
     `.github/pull_request_template.md`), optionally *draft*, then `gh-prv-local` pushes the reviewed commit
     and runs `gh pr create` (or reuses the open PR). Also available from the **Conversation** tab,

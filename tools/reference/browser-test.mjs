@@ -1,6 +1,7 @@
 // The browser tab mode, end to end, with headless Chrome: the server's guards (token, Host, Origin,
 // cross-site requests, CSP), concurrent saves, links, a review submitted from the tab (printed on
-// stdout, the run ends) and a closed tab (the run ends as "closed"). No browser of yours opens
+// stdout, the run ends), a closed tab (the run ends as "closed") and a tab that closes itself after
+// the review ("Don't show this again"). No browser of yours opens
 // (GH_PRV_LOCAL_BROWSER=none). Use a scratch repository: the review comments stay out of it, but
 // the state of its branch is written.
 //
@@ -91,6 +92,12 @@ function start(port) {
   await tab.locator('.markdown-body a', { hasText: 'rel' }).first().click()
   await tab.waitForTimeout(500)
   check('a relative link keeps the page', tab.url() === before, tab.url())
+  // A file name jumps to its file without a history entry (a tab with one can close itself).
+  const entries = await tab.evaluate(() => history.length)
+  await tab.locator('.DiffFileHeader-name a').last().click()
+  await tab.waitForTimeout(300)
+  const jumped = await tab.evaluate(() => ({ n: history.length, hash: location.hash, y: scrollY }))
+  check('a file name jumps to the file and keeps one history entry', jumped.n === entries && /^#diff-/.test(jumped.hash) && jumped.y > 0, JSON.stringify({ entries, ...jumped }))
   external.length = 0 // the routed example.com tab above was ours
   await tab.evaluate(() => { const st = window.__prv.getState(); st.deleteComment(st.drafts.at(-1).id) })
   const cell = tab.locator('td.right-side-diff-cell').first()
@@ -106,7 +113,12 @@ function start(port) {
   check('the CLI exits after the submit', code === 0, String(code))
   check('the review is on stdout', /Changes requested/.test(run.out()) && /From the browser tab/.test(run.out()), run.out().slice(0, 200))
   await tab.waitForTimeout(500)
-  check('the tab says it is done', /Review submitted/.test(await tab.locator('body').innerText()))
+  check('the tab says it is done', /Review submitted/.test(await tab.locator('.SubmittedDialog').innerText()) && (await tab.locator('.ReviewForm').count()) === 0)
+  const dontShow = tab.getByRole('checkbox', { name: "Don't show this again" })
+  check('"Don\'t show this again" starts off', (await dontShow.count()) === 1 && !(await dontShow.isChecked()))
+  await dontShow.check()
+  const saved = await tab.evaluate(() => JSON.parse(localStorage.getItem('prv:settings') ?? '{}').closeTab)
+  check('ticking it is saved for the next review (this tab stays)', saved === true && !tab.isClosed())
   check('no request to any other host', external.length === 0, external.join(', '))
   await browser.close()
 }
@@ -123,6 +135,46 @@ function start(port) {
   const code = await Promise.race([run.exit, new Promise((r) => setTimeout(() => r('timeout'), 45000))])
   check(`closing the tab ends the run (${Math.round((Date.now() - t0) / 1000)}s)`, code === 0 && /closed/.test(run.out()), `${code} ${run.out()}`)
   if (code === 'timeout') run.p.kill()
+}
+// 3–4. "Don't show this again": the tab closes itself once the review is submitted, unless the
+// browser refuses (a tab it did not open by script, with more than one history entry).
+async function submitWithCloseTab(port, { extraEntry }) {
+  const run = start(port)
+  const url = await run.url
+  const { browser, ctx, page: blank } = await openChrome({ width: 1200, height: 800 })
+  // A tab opened at the address, as gh-prv-local opens it (newPage's about:blank would be a second
+  // history entry): one history entry, and not opened by a script.
+  const { targetInfo } = await (await ctx.newCDPSession(blank)).send('Target.getTargetInfo')
+  const opened = ctx.waitForEvent('page')
+  await (await browser.newBrowserCDPSession()).send('Target.createTarget', { url, browserContextId: targetInfo.browserContextId })
+  const tab = await opened
+  await blank.close()
+  await tab.waitForSelector('.DiffEntry', { timeout: 20000 })
+  await tab.evaluate(() => localStorage.setItem('prv:settings', JSON.stringify({ closeTab: true })))
+  await tab.reload()
+  await tab.waitForSelector('.DiffEntry', { timeout: 20000 })
+  await tab.locator('.DiffFileHeader-name a').first().click()
+  if (extraEntry) await tab.evaluate(() => history.pushState(null, '', '#elsewhere'))
+  const entries = await tab.evaluate(() => history.length)
+  const closed = tab.waitForEvent('close', { timeout: 5000 }).then(() => true, () => false)
+  await tab.getByRole('button', { name: 'Submit review' }).click()
+  await tab.getByRole('textbox', { name: 'Review body' }).fill('Closing review')
+  await tab.locator('.ReviewForm-submit').click()
+  const code = await Promise.race([run.exit, new Promise((r) => setTimeout(() => r('timeout'), 15000))])
+  if (code === 'timeout') run.p.kill()
+  return { browser, tab, entries, closed: await closed, code, out: run.out() }
+}
+{
+  const r = await submitWithCloseTab(19613, { extraEntry: false })
+  check('"Don\'t show this again": the review goes out and the tab closes itself', r.code === 0 && /Closing review/.test(r.out) && r.closed, JSON.stringify({ code: r.code, closed: r.closed, entries: r.entries }))
+  await r.browser.close()
+}
+{
+  const r = await submitWithCloseTab(19614, { extraEntry: true })
+  const text = r.closed ? '' : await r.tab.locator('.SubmittedDialog').innerText().catch(() => '')
+  const ticked = !r.closed && (await r.tab.getByRole('checkbox', { name: "Don't show this again" }).isChecked().catch(() => false))
+  check('a tab the browser keeps open shows the dialog instead (still ticked)', r.code === 0 && !r.closed && /close it yourself/.test(text) && ticked, JSON.stringify({ code: r.code, closed: r.closed, entries: r.entries, text }))
+  await r.browser.close()
 }
 console.log(results.join('\n'))
 process.exit(results.some((r) => r.startsWith('FAIL')) ? 1 : 0)

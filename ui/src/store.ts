@@ -34,6 +34,8 @@ export interface Settings {
   treeVisible: boolean
   /** Native window zoom (browsers keep their own). */
   zoom: number
+  /** A browser tab closes itself once its review is submitted ("Don't show this again"). */
+  closeTab: boolean
 }
 
 export interface CommentTarget {
@@ -80,6 +82,7 @@ function loadSettings(): Settings {
     minimizeComments: false,
     treeVisible: true,
     zoom: 1,
+    closeTab: false,
     ...savedSettings(),
   }
   const diff = fromUrl.get('diff')
@@ -538,7 +541,8 @@ export const useStore = create<Store>((set, get) => ({
       persist(get)
       throw e
     }
-    set({ busy: null, submitted: { result, markdown }, drafts: [], lastReview, reviewDraft: EMPTY_REVIEW })
+    // The review popup closes (on github.com the page moves on), leaving the "submitted" dialog.
+    set({ busy: null, submitted: { result, markdown }, drafts: [], lastReview, reviewDraft: EMPTY_REVIEW, reviewOpen: false })
   },
 }))
 

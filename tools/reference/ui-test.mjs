@@ -310,6 +310,7 @@ await check('submit a review: request changes with both comments', async () => {
   assert(md.includes('Changes requested'), 'headline')
   assert(md.includes('(whole file)') && md.includes('line 18 (old/deleted side)'), 'both comments')
   assert(md.includes('Please address these.'), 'summary')
+  assert((await page.locator('.ReviewForm').count()) === 0, 'the review popup closed (it would cover the dialog)')
 })
 
 // ---------------- Widths (github.com's responsive behaviour, docs/reference.md) ----------------

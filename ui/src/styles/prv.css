@@ -2150,6 +2150,9 @@ a.BlockedImage:hover {
   font-size: 12px;
   white-space: pre-wrap;
 }
+.SubmittedDialog-note p {
+  margin: 0 0 16px;
+}
 .SubmittedDialog footer {
   display: flex;
   justify-content: flex-end;
