@@ -815,9 +815,9 @@ function DiffTable(p: TableProps) {
                 )}
               </tr>
               {(cl || cr) && (
-                // Part of its line's row on github.com: selected with it, both sides.
+                // Part of its line's row on github.com: selected with it (a side without a line stays empty).
                 <tr className="diff-comment-row">
-                  {cl || rowSel ? (
+                  {cl || (rowSel && L) ? (
                     <>
                       <td className="new-diff-line-number" data-selected={rowSel} style={{ backgroundColor: NUM_BG[lk] }} />
                       <td className="diff-comment-cell" data-selected={rowSel} style={{ backgroundColor: LINE_BG[lk] }}>
@@ -827,7 +827,7 @@ function DiffTable(p: TableProps) {
                   ) : (
                     <td colSpan={2} className="empty-diff-line" />
                   )}
-                  {cr || rowSel ? (
+                  {cr || (rowSel && R) ? (
                     <>
                       <td className="new-diff-line-number" data-selected={rowSel} style={{ backgroundColor: NUM_BG[rk] }} />
                       <td className="diff-comment-cell" data-selected={rowSel} style={{ backgroundColor: LINE_BG[rk] }}>
