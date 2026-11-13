@@ -1,6 +1,6 @@
 {
   "name": "gh-prv-local",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Preview the current branch as a GitHub pull request (Files changed) before pushing, review it with line comments, and hand the feedback to Claude, round after round. Confirm approves it and Claude opens the PR the repository's way (with --publish, gh-prv-local pushes and opens it).",
   "author": { "name": "fornewid" },
   "homepage": "https://github.com/fornewid/github-preview-local",

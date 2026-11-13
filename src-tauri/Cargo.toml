@@ -1,6 +1,6 @@
 [package]
 name = "gh-prv-local"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "Preview your branch as a GitHub pull request, locally — no web server, no round-trips to GitHub."
 license = "MIT"
