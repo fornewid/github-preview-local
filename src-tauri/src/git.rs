@@ -249,6 +249,38 @@ pub fn parse_remote(url: &str) -> (Option<String>, Option<String>, Option<String
 /// Base branch names tried, in order, when the remote has no default branch (HEAD).
 const DEFAULT_BRANCHES: [&str; 4] = ["main", "master", "develop", "trunk"];
 
+/// The remote branch `head` was started from when that is not the default branch (a release or an
+/// epic branch): the one missing the fewest of head's commits (then the one with the fewest commits
+/// of its own since), if it misses fewer than the default branch does. Not head's own branch on the
+/// remote, nor one that already has all of head. Needs git 2.41 (`ahead-behind`).
+fn started_from(git: &Git, rm: &str, default: &str, head_sha: &str, head_name: &str) -> Option<(String, String)> {
+    if !git_at_least(git, 2, 41) {
+        return None;
+    }
+    let out = git
+        .run(&["for-each-ref", &format!("--format=%(refname)%09%(ahead-behind:{head_sha})"), &format!("refs/remotes/{rm}/")])
+        .ok()?;
+    let prefix = format!("refs/remotes/{rm}/");
+    let mut default_missing = None;
+    let mut best: Option<(u64, u64, String)> = None;
+    for line in out.lines() {
+        let Some((refname, counts)) = line.split_once('\t') else { continue };
+        let Some(name) = refname.strip_prefix(&prefix) else { continue };
+        let mut n = counts.split_whitespace().map(|c| c.parse::<u64>().ok());
+        let (Some(Some(own)), Some(Some(missing))) = (n.next(), n.next()) else { continue };
+        if name == "HEAD" || name == head_name {
+            continue;
+        }
+        if format!("{rm}/{name}") == default {
+            default_missing = Some(missing);
+        } else if missing > 0 && best.as_ref().is_none_or(|(m, o, _)| (missing, own) < (*m, *o)) {
+            best = Some((missing, own, name.to_string()));
+        }
+    }
+    let (missing, _, name) = best?;
+    (missing < default_missing?).then(|| (format!("{rm}/{name}"), name))
+}
+
 fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(String, String), String> {
     let strip = |r: &str| -> String {
         match remote {
@@ -661,7 +693,17 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     };
 
     // Base (+ fetch so the comparison matches what GitHub would show)
-    let (base_ref, base_name) = resolve_base(git, remote.as_deref(), opts.base.as_deref())?;
+    let (mut base_ref, mut base_name) = resolve_base(git, remote.as_deref(), opts.base.as_deref())?;
+    // No --base: a branch started from a release or epic branch compares with that branch, as its
+    // pull request would (the default branch would show that branch's commits too).
+    if opts.base.is_none() {
+        if let Some((r, n)) = remote.as_deref().and_then(|rm| started_from(git, rm, &base_ref, &head_sha, &head_name)) {
+            warnings.push(format!(
+                "Comparing with `{n}`, the branch `{head_name}` was started from, not the default branch `{base_name}`. Pass --base to compare with another branch."
+            ));
+            (base_ref, base_name) = (r, n);
+        }
+    }
     if opts.fetch {
         if let Some(rm) = remote.as_deref() {
             if base_ref.starts_with(&format!("{rm}/")) {
@@ -1142,6 +1184,54 @@ mod tests {
             assert!(ok);
         }
         (Git::discover(&dir).unwrap(), dir)
+    }
+
+    #[test]
+    fn base_is_the_branch_head_was_started_from() {
+        let (git, dir) = scratch_repo(&[
+            ("remote.origin.url", "https://github.com/me/b.git"),
+            ("user.name", "t"),
+            ("user.email", "t@example.com"),
+        ]);
+        let run = |args: &[&str]| git.run(args).unwrap();
+        let commit = |msg: &str| {
+            std::fs::write(dir.join("f.txt"), msg).unwrap();
+            run(&["add", "f.txt"]);
+            run(&["commit", "-q", "-m", msg]);
+            run(&["rev-parse", "HEAD"]).trim().to_string()
+        };
+        run(&["checkout", "-q", "-b", "main"]);
+        let c1 = commit("c1");
+        run(&["update-ref", "refs/remotes/origin/main", &c1]);
+        run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        commit("c2");
+        let c3 = commit("c3");
+        run(&["update-ref", "refs/remotes/origin/release/1", &c3]);
+        // Another branch from the release branch, with a commit of its own: not the base.
+        let c4 = commit("c4");
+        run(&["update-ref", "refs/remotes/origin/feature-x", &c4]);
+        run(&["checkout", "-q", "-b", "work", &c3]);
+        let c5 = commit("c5");
+        // Head's own branch on the remote, and one that already has head: not the base either.
+        run(&["update-ref", "refs/remotes/origin/work", &c5]);
+        let c6 = commit("c6");
+        run(&["update-ref", "refs/remotes/origin/later", &c6]);
+        run(&["reset", "-q", "--hard", &c5]);
+
+        let opts = Options { fetch: false, ..Default::default() };
+        let r = snapshot(&git, &opts, &RangeInfo::default()).unwrap();
+        assert_eq!((r.snapshot.base.name.as_str(), r.snapshot.commits.len()), ("release/1", 1));
+        assert!(r.snapshot.warnings.iter().any(|w| w.contains("`release/1`, the branch `work` was started from")));
+        // --base wins.
+        let main = Options { fetch: false, base: Some("main".into()), ..Default::default() };
+        let r = snapshot(&git, &main, &RangeInfo::default()).unwrap();
+        assert_eq!((r.snapshot.base.name.as_str(), r.snapshot.commits.len()), ("main", 3));
+        // Started from the default branch: that stays the base.
+        run(&["checkout", "-q", "-b", "plain", &c1]);
+        commit("c7");
+        let r = snapshot(&git, &opts, &RangeInfo::default()).unwrap();
+        assert_eq!((r.snapshot.base.name.as_str(), r.snapshot.commits.len()), ("main", 1));
+        assert!(r.snapshot.warnings.is_empty(), "{:?}", r.snapshot.warnings);
     }
 
     #[test]

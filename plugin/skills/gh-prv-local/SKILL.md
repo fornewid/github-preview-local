@@ -32,6 +32,11 @@ gh-prv-local --publish       # Confirm pushes and opens the PR itself (only when
 gh-prv-local --format json   # machine-readable result
 ```
 
+Without `--base`, the base is the remote default branch, or the remote branch HEAD was started
+from when that is another one (a release or epic branch). If the repository has rules for a pull
+request's base branch (in its CLAUDE.md, contributing guide, …), decide the base by them and pass
+`--base <branch>`, and keep it for every round.
+
 When it exits, its stdout is the review:
 
 - `# Pull request preview: Changes requested` / `Review comments` — every comment with

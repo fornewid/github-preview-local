@@ -39,7 +39,8 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder}
                   open the pull request the repository's way; with --publish it pushes and opens the pull request itself."
 )]
 struct Cli {
-    /// Base branch or ref (default: the remote's default branch, e.g. origin/main)
+    /// Base branch or ref (default: the remote's default branch, e.g. origin/main, or the remote
+    /// branch HEAD was started from when that is another one, such as a release branch)
     #[arg(short, long, global = true)]
     base: Option<String>,
     /// Head ref to preview (default: HEAD)
