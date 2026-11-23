@@ -568,6 +568,12 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
                   stay unchanged.
                 </Flash>
               )}
+              {s.guessedBase && (
+                <Flash variant="warning">
+                  <AlertIcon size={16} /> {s.base.name} was taken as the base, the branch {s.head.name} was started from. Run
+                  gh-prv-local with --base to choose another.
+                </Flash>
+              )}
               {s.dirty && (
                 <Flash variant="warning">
                   <AlertIcon size={16} /> You have uncommitted changes. Only committed changes are pushed.

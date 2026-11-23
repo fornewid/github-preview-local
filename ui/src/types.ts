@@ -86,6 +86,8 @@ export interface Snapshot {
   existingPr?: ExistingPr | null
   /** Confirm pushes the branch and opens the pull request (`--publish`); otherwise it only approves. */
   publish?: boolean
+  /** The base was not given (--base) but taken as the branch head was started from. */
+  guessedBase?: boolean
 }
 
 export type Side = 'LEFT' | 'RIGHT'
