@@ -105,7 +105,7 @@ repository does it), close the tab without a review, or Claude needs to ask you 
 
 ```bash
 gh-prv-local                         # HEAD vs the remote default branch (fetches the base first), in a browser tab;
-                                     # a branch started from another remote branch (release/…) is compared with that one
+                                     # a branch started from another remote branch (release/…) is compared with that one (git 2.41+)
 gh-prv-local --base develop          # another base branch (origin/develop if it exists)
 gh-prv-local --uncommitted           # include uncommitted + untracked changes (staging area untouched)
 gh-prv-local --no-fetch              # do not fetch the base branch

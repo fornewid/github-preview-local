@@ -260,7 +260,8 @@ enum StartedFrom {
 }
 
 /// Looks at the remote's branches (git 2.41: `ahead-behind`), leaving out head's own branch there
-/// (same name or upstream) and the ones that already have all of head.
+/// (the same name, or ending in `/<name>` like `me/work`) and the ones that already have all of head.
+/// Not by upstream: a branch made from `origin/release/1` has that as its upstream.
 fn started_from(git: &Git, rm: &str, default: &str, head_sha: &str, head_name: &str) -> Option<StartedFrom> {
     if !git_at_least(git, 2, 41) {
         return None;
@@ -271,7 +272,6 @@ fn started_from(git: &Git, rm: &str, default: &str, head_sha: &str, head_name: &
             Duration::from_secs(10),
         )
         .ok()?;
-    let upstream = git.line(&["rev-parse", "--symbolic-full-name", "-q", &format!("{head_name}@{{upstream}}")]);
     let prefix = format!("refs/remotes/{rm}/");
     let mut default_missing = None;
     let mut found: Vec<(u64, u64, String, String)> = vec![];
@@ -281,11 +281,10 @@ fn started_from(git: &Git, rm: &str, default: &str, head_sha: &str, head_name: &
         let Some(name) = refname.strip_prefix(&prefix) else { continue };
         let mut n = counts.split_whitespace().map(|c| c.parse::<u64>().ok());
         let (Some(Some(own)), Some(Some(missing))) = (n.next(), n.next()) else { continue };
-        if name == "HEAD" || name == head_name || upstream.as_deref() == Some(refname) {
-            continue;
-        }
         if format!("{rm}/{name}") == default {
             default_missing = Some(missing);
+        } else if name == "HEAD" || name == head_name || name.ends_with(&format!("/{head_name}")) {
+            continue;
         } else if missing > 0 {
             found.push((missing, own, name.to_string(), tip.to_string()));
         }
@@ -295,9 +294,15 @@ fn started_from(git: &Git, rm: &str, default: &str, head_sha: &str, head_name: &
     found.sort();
     // Tips on head's first-parent line, within the commits the default branch misses: not a branch
     // merged into head.
-    let line = git.run(&["rev-list", "--first-parent", "-n", &(default_missing + 1).to_string(), head_sha]).unwrap_or_default();
-    if let Some((_, _, name, _)) = found.iter().find(|(_, own, _, tip)| *own == 0 && line.lines().any(|l| l == tip)) {
-        return Some(StartedFrom::Branch(format!("{rm}/{name}"), name.clone()));
+    // (Such a tip is at most `missing` commits back.)
+    if let Some(depth) = found.iter().filter(|f| f.1 == 0).map(|f| f.0).max() {
+        let line = git
+            .run_timeout(&["rev-list", "--first-parent", "-n", &(depth + 1).to_string(), head_sha], Duration::from_secs(10))
+            .unwrap_or_default();
+        let line: std::collections::HashSet<&str> = line.lines().collect();
+        if let Some((_, _, name, _)) = found.iter().find(|(_, own, _, tip)| *own == 0 && line.contains(tip.as_str())) {
+            return Some(StartedFrom::Branch(format!("{rm}/{name}"), name.clone()));
+        }
     }
     found.first().map(|(_, _, name, _)| StartedFrom::Maybe(name.clone()))
 }
@@ -715,8 +720,9 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
 
     // Base (+ fetch so the comparison matches what GitHub would show)
     let (mut base_ref, mut base_name) = resolve_base(git, remote.as_deref(), opts.base.as_deref())?;
-    let fetch_base = |base_ref: &str, base_name: &str, warnings: &mut Vec<String>| {
-        let Some(rm) = remote.as_deref().filter(|rm| opts.fetch && base_ref.starts_with(&format!("{rm}/"))) else { return };
+    // False when the fetch failed (the last fetched state stays).
+    let fetch_base = |base_ref: &str, base_name: &str, warnings: &mut Vec<String>| -> bool {
+        let Some(rm) = remote.as_deref().filter(|rm| opts.fetch && base_ref.starts_with(&format!("{rm}/"))) else { return true };
         let spec = format!("+refs/heads/{base_name}:refs/remotes/{rm}/{base_name}");
         // The base branch from origin only: no submodules (their hosts), no bundle URIs.
         let fetch = [
@@ -727,7 +733,9 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
             warnings.push(format!(
                 "Could not fetch `{base_ref}` ({e}); comparing against the last fetched state. Use --no-fetch to skip fetching."
             ));
+            return false;
         }
+        true
     };
     fetch_base(&base_ref, &base_name, &mut warnings);
     // No --base: a branch started from a release or epic branch compares with that branch, as its
@@ -738,12 +746,18 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     if opts.base.is_none() && on_branch {
         match remote.as_deref().and_then(|rm| started_from(git, rm, &base_ref, &head_sha, &head_name)) {
             Some(StartedFrom::Branch(r, n)) => {
-                warnings.push(format!(
-                    "Comparing with `{n}`, the branch `{head_name}` was started from, not the default branch `{base_name}`. Pass --base to compare with another branch."
-                ));
-                (base_ref, base_name) = (r, n);
-                guessed_base = true;
-                fetch_base(&base_ref, &base_name, &mut warnings);
+                // Still there, and still a base of head once fetched (not deleted, nor moved on).
+                let mut fetched = vec![];
+                let kept = fetch_base(&r, &n, &mut fetched) && git.ok(&["merge-base", "--is-ancestor", &r, &head_sha]);
+                if kept {
+                    warnings.push(format!(
+                        "Comparing with `{n}`, the branch `{head_name}` was started from, not the default branch `{base_name}`. Pass --base to compare with another branch."
+                    ));
+                    (base_ref, base_name) = (r, n);
+                    guessed_base = true;
+                } else {
+                    warnings.push(format!("Some of these commits are on `{n}` too: if `{head_name}` was started from it, pass --base {n}."));
+                }
             }
             Some(StartedFrom::Maybe(n)) => warnings.push(format!(
                 "Some of these commits are on `{n}` too: if `{head_name}` was started from it, pass --base {n}."
@@ -1242,7 +1256,8 @@ mod tests {
         // Another branch from the release branch, with a commit of its own: not the base.
         let c4 = commit("c4");
         run(&["update-ref", "refs/remotes/origin/feature-x", &c4]);
-        run(&["checkout", "-q", "-b", "work", &c3]);
+        // Made from the remote branch, which becomes its upstream.
+        run(&["checkout", "-q", "--track", "-b", "work", "origin/release/1"]);
         let c5 = commit("c5");
         // Head's own branch on the remote, and one that already has head: not the base either.
         run(&["update-ref", "refs/remotes/origin/work", &c5]);
@@ -1258,10 +1273,8 @@ mod tests {
         assert_eq!((r.snapshot.base.name.as_str(), r.snapshot.commits.len()), ("release/1", 1));
         assert!(r.snapshot.guessed_base);
         assert!(r.snapshot.warnings.iter().any(|w| w.contains("`release/1`, the branch `work` was started from")));
-        // Its upstream under another name is not the base either.
-        run(&["update-ref", "refs/remotes/origin/me/work", &c3]);
-        run(&["config", "branch.work.remote", "origin"]);
-        run(&["config", "branch.work.merge", "refs/heads/me/work"]);
+        // Its own branch under a prefix is not the base either.
+        run(&["update-ref", "refs/remotes/origin/me/work", &c5]);
         // A branch started from head (or merged into it) with commits of its own: only named.
         let c8 = commit("c8");
         run(&["checkout", "-q", "-b", "sub", &c5]);
