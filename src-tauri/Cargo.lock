@@ -1102,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "gh-prv-local"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "clap",
  "ctrlc",
