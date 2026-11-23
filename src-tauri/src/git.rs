@@ -737,7 +737,8 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         }
         true
     };
-    fetch_base(&base_ref, &base_name, &mut warnings);
+    // Offline (the default branch could not be fetched): the guess uses the last fetched state.
+    let online = fetch_base(&base_ref, &base_name, &mut warnings);
     // No --base: a branch started from a release or epic branch compares with that branch, as its
     // pull request would (the default branch would show that branch's commits too). Only for a
     // checked-out branch (not --head, not a detached HEAD), after the default branch is fetched.
@@ -748,7 +749,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
             Some(StartedFrom::Branch(r, n)) => {
                 // Still there, and still a base of head once fetched (not deleted, nor moved on).
                 let mut fetched = vec![];
-                let kept = fetch_base(&r, &n, &mut fetched) && git.ok(&["merge-base", "--is-ancestor", &r, &head_sha]);
+                let kept = (!online || fetch_base(&r, &n, &mut fetched)) && git.ok(&["merge-base", "--is-ancestor", &r, &head_sha]);
                 if kept {
                     warnings.push(format!(
                         "Comparing with `{n}`, the branch `{head_name}` was started from, not the default branch `{base_name}`. Pass --base to compare with another branch."
