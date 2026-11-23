@@ -298,13 +298,14 @@ fn started_from(git: &Git, rm: &str, default: &str, head_sha: &str, head_name: &
     if let Some(depth) = found.iter().filter(|f| f.1 == 0).map(|f| f.0).max() {
         let line = git
             .run_timeout(&["rev-list", "--first-parent", "-n", &(depth + 1).to_string(), head_sha], Duration::from_secs(10))
-            .unwrap_or_default();
+            .ok()?;
         let line: std::collections::HashSet<&str> = line.lines().collect();
         if let Some((_, _, name, _)) = found.iter().find(|(_, own, _, tip)| *own == 0 && line.contains(tip.as_str())) {
             return Some(StartedFrom::Branch(format!("{rm}/{name}"), name.clone()));
         }
     }
-    found.first().map(|(_, _, name, _)| StartedFrom::Maybe(name.clone()))
+    // Not one merged into head (no commits of its own).
+    found.iter().find(|f| f.1 > 0).map(|(_, _, name, _)| StartedFrom::Maybe(name.clone()))
 }
 
 fn resolve_base(git: &Git, remote: Option<&str>, arg: Option<&str>) -> Result<(String, String), String> {
@@ -743,20 +744,22 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     // pull request would (the default branch would show that branch's commits too). Only for a
     // checked-out branch (not --head, not a detached HEAD), after the default branch is fetched.
     let mut guessed_base = false;
-    let on_branch = head_ref == "HEAD" && head_name != head_sha[..7];
+    let on_branch = head_ref == "HEAD" && head_name != head_sha[..7] && head_name != base_name;
     if opts.base.is_none() && on_branch {
         match remote.as_deref().and_then(|rm| started_from(git, rm, &base_ref, &head_sha, &head_name)) {
             Some(StartedFrom::Branch(r, n)) => {
                 // Still there, and still a base of head once fetched (not deleted, nor moved on).
                 let mut fetched = vec![];
-                let kept = (!online || fetch_base(&r, &n, &mut fetched)) && git.ok(&["merge-base", "--is-ancestor", &r, &head_sha]);
+                let there = !online || fetch_base(&r, &n, &mut fetched);
+                let kept = there && git.ok(&["merge-base", "--is-ancestor", &r, &head_sha]);
                 if kept {
                     warnings.push(format!(
                         "Comparing with `{n}`, the branch `{head_name}` was started from, not the default branch `{base_name}`. Pass --base to compare with another branch."
                     ));
                     (base_ref, base_name) = (r, n);
                     guessed_base = true;
-                } else {
+                } else if there {
+                    // Moved on since: named only. (Not fetched: deleted on the remote, nothing to suggest.)
                     warnings.push(format!("Some of these commits are on `{n}` too: if `{head_name}` was started from it, pass --base {n}."));
                 }
             }
