@@ -545,7 +545,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
             <div className="ReviewForm-confirm">
               {s.dirty && (
                 <Flash variant="warning">
-                  <AlertIcon size={16} /> You have uncommitted changes. The pull request gets only what is committed.
+                  <AlertIcon size={16} /> You have uncommitted changes.
                 </Flash>
               )}
               {checks.total > 0 && (checks.failed > 0 || checks.idle > 0) && <ChecksWarning checks={checks} />}

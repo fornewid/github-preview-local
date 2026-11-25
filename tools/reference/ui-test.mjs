@@ -645,7 +645,7 @@ await check('Confirm: an approval for the agent, or with --publish a push and a 
   await p.waitForTimeout(300)
   await p.getByRole('radio', { name: 'Confirm' }).check()
   await p.waitForTimeout(200)
-  assert(/You have uncommitted changes\. The pull request gets only what is committed\./.test(await p.locator('.ReviewForm').innerText()), 'uncommitted warning')
+  assert(/You have uncommitted changes\./.test(await p.locator('.ReviewForm').innerText()), 'uncommitted warning')
   await p.locator('.ReviewForm-submit').click()
   await p.waitForTimeout(800)
   const md = await p.locator('.SubmittedDialog pre').innerText()
