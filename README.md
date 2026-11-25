@@ -131,7 +131,8 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
 - Hover a line and click **+** to comment. For several lines, drag from the first line's **+** to
   the last, or select them (drag over the line numbers, or click one and shift-click another) and
   click the last line's **+**. The comment button in a file header comments on the whole file. The comment box
-  has GitHub's formatting toolbar, including *suggestions*.
+  has GitHub's formatting toolbar, including *suggestions*; Cmd/Ctrl+Enter adds the comment (or
+  saves an edit), like its button.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the review is printed to stdout and gh-prv-local ends (the window
     closes; a tab says it is done, or with *Don't show this again* ticked closes itself).

@@ -57,10 +57,35 @@ await check('line comment: + opens the form and Start a review adds a pending co
 await check('edit a comment from its menu', async () => {
   await first().locator('.ReviewThread').getByRole('button', { name: 'Comment actions' }).click()
   await page.getByRole('menuitem', { name: 'Edit' }).click()
-  await page.getByRole('textbox', { name: 'Edit comment' }).fill('Why remove SuppressLint here?')
-  await page.getByRole('button', { name: 'Update comment' }).click()
+  await page.getByRole('textbox', { name: 'Edit comment' }).fill('')
+  await page.keyboard.press('ControlOrMeta+Enter')
   await settle()
+  assert(await page.getByRole('textbox', { name: 'Edit comment' }).isVisible(), 'an empty edit is not saved')
+  await page.getByRole('textbox', { name: 'Edit comment' }).fill('Why remove SuppressLint here?')
+  await page.keyboard.press('ControlOrMeta+Enter')
+  await settle()
+  assert(!(await page.getByRole('textbox', { name: 'Edit comment' }).count()), 'Cmd/Ctrl+Enter saves the edit')
   assert((await first().locator('.ReviewThread').innerText()).includes('here?'), 'updated body')
+})
+
+await check('line comment: Cmd/Ctrl+Enter adds it, not when empty', async () => {
+  const cell = first().locator('td.left-side-diff-cell').nth(4)
+  await cell.hover()
+  await cell.getByRole('button', { name: 'Add comment' }).click()
+  await settle()
+  const box = page.getByRole('textbox', { name: 'Add diff comment' })
+  await box.press('ControlOrMeta+Enter')
+  await settle()
+  assert(await box.isVisible() && (await first().locator('.ReviewThread').count()) === 1, 'an empty comment is not added')
+  await box.fill('Keyboard comment')
+  await box.press('ControlOrMeta+Enter')
+  await settle()
+  assert(!(await box.count()) && (await first().locator('.ReviewThread').count()) === 2, 'Cmd/Ctrl+Enter adds the comment')
+  // Leave the comments as they were for the checks below.
+  await first().locator('.ReviewThread', { hasText: 'Keyboard comment' }).getByRole('button', { name: 'Comment actions' }).click()
+  await page.getByRole('menuitem', { name: 'Delete' }).click()
+  await settle()
+  assert((await first().locator('.ReviewThread').count()) === 1, 'deleted')
 })
 
 await check('file comment from the header', async () => {

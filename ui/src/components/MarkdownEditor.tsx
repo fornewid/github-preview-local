@@ -188,7 +188,8 @@ export function MarkdownEditor({
   )
 }
 
-/** Editing an existing text (description, comment): the comment box, then Cancel and the save button. */
+/** Editing an existing text (description, comment): the comment box, then Cancel and the save button
+ * (Cmd/Ctrl+Enter saves, like the button). */
 export function EditForm({
   className,
   value,
@@ -213,7 +214,16 @@ export function EditForm({
 }) {
   return (
     <div className={className}>
-      <MarkdownEditor value={value} onChange={onChange} autoFocus rows={rows} label={label} />
+      <MarkdownEditor
+        value={value}
+        onChange={onChange}
+        onSubmit={() => {
+          if (!disabled) onSave()
+        }}
+        autoFocus
+        rows={rows}
+        label={label}
+      />
       <div className="InlineComment-footer">
         <Button onClick={onCancel}>Cancel</Button>
         <Button variant="primary" disabled={disabled} onClick={onSave}>
