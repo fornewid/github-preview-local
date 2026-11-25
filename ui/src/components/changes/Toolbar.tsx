@@ -533,7 +533,7 @@ function ReviewForm({ onClose }: { onClose: () => void }) {
               {range.from
                 ? 'Switch back to all commits to confirm.'
                 : !s.publish
-                  ? `Submit feedback and approve these changes. Your agent opens the pull request into ${s.base.name}.`
+                  ? 'Submit feedback and approve these changes. Nothing is pushed.'
                   : !canPublish
                     ? 'Needs `gh-prv-local` running (not an export).'
                     : pr

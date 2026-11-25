@@ -630,12 +630,12 @@ await check('Confirm: an approval for the agent, or with --publish a push and a 
       assert(/Push .+ and open a pull request into/.test(caption), `caption: ${caption}`)
       assert(titled === 1 && button.startsWith('Confirm and create pull request'), `title field ${titled}, button ${button}`)
     } else {
-      assert(/approve these changes. Your agent opens the pull request into/.test(caption), `caption: ${caption}`)
+      assert(/approve these changes\. Nothing is pushed\./.test(caption), `caption: ${caption}`)
       assert(titled === 0 && button.startsWith('Submit review'), `title field ${titled}, button ${button}`)
     }
     await native.close()
   }
-  // An export: the approval tells the agent to open the pull request itself.
+  // An export: the approval ends the review and asks for no pull request.
   const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => errors.push(e.message))
   await openExport(p, file, { wait: 1500 })
@@ -649,8 +649,9 @@ await check('Confirm: an approval for the agent, or with --publish a push and a 
   await p.locator('.ReviewForm-submit').click()
   await p.waitForTimeout(800)
   const md = await p.locator('.SubmittedDialog pre').innerText()
-  assert(/# Pull request preview: Confirmed/.test(md) && /Nothing was pushed: push `.+` and open the pull request into `.+` the way this repository does it/.test(md), md.slice(0, 300))
-  assert(/The working tree has uncommitted changes: commit what belongs in the pull request before pushing\./.test(md), 'uncommitted note in the result')
+  assert(/# Pull request preview: Confirmed/.test(md) && /nothing was pushed\. Pushing or opening a pull request is not part of this approval/.test(md), md.slice(0, 300))
+  assert(!/push `|open the pull request into/.test(md), 'no instruction to push or open a pull request')
+  assert(/The working tree has uncommitted changes\./.test(md), 'uncommitted note in the result')
   await p.close()
 })
 

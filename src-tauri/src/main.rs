@@ -3,8 +3,8 @@
 //! `gh-prv-local` opens a native window (system WebView, Tauri IPC — no web server)
 //! showing the branch the way GitHub's "Files changed" tab would. When you
 //! submit a review the result is printed to stdout, so AI agents such as
-//! Claude Code can act on it. "Confirm" approves the branch (with `--publish` it also pushes the
-//! branch and opens the PR).
+//! Claude Code can act on it. "Confirm" approves the changes and ends the review (with
+//! `--publish` it also pushes the branch and opens the PR).
 
 mod checks;
 mod export;
@@ -35,8 +35,8 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder}
     about = "Preview your branch as a GitHub pull request, locally.",
     long_about = "Opens your branch in a GitHub-style \"Files changed\" view (merge-base...HEAD, like a pull request)\n\
                   in a browser tab (served on 127.0.0.1 for this run only), or in a native window with --window.\n\
-                  Submitting a review prints it to stdout for AI agents. \"Confirm\" approves the branch, for the agent to\n\
-                  open the pull request the repository's way; with --publish it pushes and opens the pull request itself."
+                  Submitting a review prints it to stdout for AI agents. \"Confirm\" approves the changes and ends the\n\
+                  review (nothing is pushed); with --publish it pushes and opens the pull request itself."
 )]
 struct Cli {
     /// Base branch or ref (default: the remote's default branch, e.g. origin/main, or the remote

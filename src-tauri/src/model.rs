@@ -99,7 +99,7 @@ pub struct Snapshot {
     pub conflicts: Option<Vec<String>>,
     pub existing_pr: Option<ExistingPr>,
     /// Confirm pushes the branch and opens the pull request (`--publish`); otherwise it only
-    /// returns the approval, and the agent opens the pull request the repository's way.
+    /// returns the approval.
     pub publish: bool,
     /// The base was not given (--base) but taken as the branch head was started from.
     pub guessed_base: bool,

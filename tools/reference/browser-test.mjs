@@ -199,7 +199,7 @@ async function submitWithCloseTab(port, { extraEntry }) {
   await tab.locator('.ReviewForm-submit').click()
   const code = await Promise.race([run.exit, new Promise((r) => setTimeout(() => r('timeout'), 15000))])
   if (code === 'timeout') run.p.kill()
-  check('Confirm: the approval on stdout, for the agent to open the pull request', code === 0 && /Pull request preview: Confirmed/.test(run.out()) && /Nothing was pushed/.test(run.out()) && /Ship it/.test(run.out()), `${code} ${run.out().slice(0, 300)}`)
+  check('Confirm: the approval on stdout, ending the review (no push, no pull request asked for)', code === 0 && /Pull request preview: Confirmed/.test(run.out()) && /nothing was pushed/.test(run.out()) && !/open the pull request into/.test(run.out()) && /Ship it/.test(run.out()), `${code} ${run.out().slice(0, 300)}`)
   await browser.close()
 }
 console.log(results.join('\n'))

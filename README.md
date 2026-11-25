@@ -2,8 +2,8 @@
 
 Preview your branch **exactly the way github.com's pull request "Files changed" page shows it**,
 before you push. Review it with line comments, hand the review to an AI agent (Claude Code), run
-local checks, and when you are happy press **Confirm**: the agent opens the pull request the way your
-repository does it (or, with `--publish`, gh-prv-local pushes the branch and opens it).
+local checks, and when you are happy press **Confirm** to end the review (with `--publish`,
+gh-prv-local also pushes the branch and opens the pull request).
 
 - **Same look and options as github.com** (the new *Files changed* experience, 2026), built on the
   same Primer React release github.com runs: sticky toolbar, *All commits* picker (*Changes since
@@ -97,8 +97,8 @@ From source (Rust and Node.js 20+): `./scripts/install.sh --source` in a clone.
 
 Then run `/gh-prv-local` (or just ask Claude to "preview the PR"). A browser tab opens; when you submit,
 Claude receives your review, addresses each comment and opens the next round itself (with the same
-options). The rounds end when you press *Confirm* (Claude then opens the pull request the way the
-repository does it), close the tab without a review, or Claude needs to ask you something. Tick
+options). The rounds end when you press *Confirm* (an approval: Claude pushes or opens a pull
+request only if you ask it to), close the tab without a review, or Claude needs to ask you something. Tick
 *Don't show this again* after a review so that finished rounds close their tabs.
 
 ## Usage
@@ -135,9 +135,8 @@ level is remembered); in a browser tab (and an export) use the browser's zoom.
 - **Submit review** → *Comment*, *Request changes* or **Confirm** (replaces *Approve*).
   - *Comment / Request changes*: the review is printed to stdout and gh-prv-local ends (the window
     closes; a tab says it is done, or with *Don't show this again* ticked closes itself).
-  - *Confirm*: the approval (with your summary) is printed the same way, and nothing is pushed: the
-    agent pushes and opens the pull request the way the repository does it (its title rules,
-    description, labels, …). With `--publish`, Confirm instead lets you edit the PR title /
+  - *Confirm*: the approval (with your summary) is printed the same way and the review rounds end;
+    nothing is pushed, and it does not ask the agent for a pull request. With `--publish`, Confirm instead lets you edit the PR title /
     description (prefilled from the commit or `.github/pull_request_template.md`), optionally
     *draft*, then `gh-prv-local` pushes the reviewed commit and runs `gh pr create` (or reuses the
     open PR). Also available from the **Conversation** tab, which shows the local checks and whether

@@ -22,10 +22,9 @@ with `--base <branch>` added. Review rounds repeat until the user confirms or st
   user's review), wait for it to finish, and handle its result by these same rules. Ask the user
   instead of opening the next round when a comment cannot be addressed without their decision, or
   when a round brings back a comment you already addressed.
-- **Confirmed**: the user approved the branch; nothing was pushed. Open the pull request the way
-  this repository does it (its own pull request procedure: title rules, description, labels,
-  milestone, assignees, …; without one, push the branch and run `gh pr create`), taking the review
-  summary into account.
+- **Confirmed**: the user approved the changes and the review rounds end; nothing was pushed. Tell
+  the user and go on with what they asked for. Confirm is not a request to push or to open a pull
+  request: do that only when the user asks for it.
   - If the result says the branch was pushed and shows the pull request URL (`--publish`): report
     it. Do not push again.
 - **Closed without a review**: the user stopped; acknowledge and continue; do not change anything.

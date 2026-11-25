@@ -55,15 +55,11 @@ export function formatReview(r: ReviewResult, s: Snapshot): string {
       )
     } else {
       out.push(
-        `The reviewer confirmed the changes. Nothing was pushed: push \`${r.head.name}\` and open the pull request into \`${r.base.name}\` ` +
-          'the way this repository does it (its title rules, description, labels, reviewers).',
+        'The reviewer confirmed the changes. The review is over; nothing was pushed. ' +
+          'Pushing or opening a pull request is not part of this approval: do it only if the user asks for it.',
       )
       if (s.dirty)
-        out.push(
-          '',
-          `The working tree has uncommitted changes${s.mode === 'worktree' ? ' (they were part of this review)' : ''}: ` +
-            'commit what belongs in the pull request before pushing.',
-        )
+        out.push('', `The working tree has uncommitted changes${s.mode === 'worktree' ? ' (they were part of this review)' : ''}.`)
     }
   } else if (r.event === 'REQUEST_CHANGES') {
     out.push('The reviewer requested changes. Address every comment below, then run `gh-prv-local` again (the same command line, plus any --base you chose) for the next review.')
