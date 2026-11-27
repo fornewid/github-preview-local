@@ -143,7 +143,7 @@ struct AppState {
     submitted: AtomicBool,
     /// The comparison made before the page opened (to say when there is nothing to review), handed
     /// to the page's first load instead of making it again.
-    first: Mutex<Option<Snapshot>>,
+    first: Mutex<Option<(Instant, Snapshot)>>,
 }
 
 #[derive(Clone, Default, serde::Serialize)]
@@ -200,7 +200,7 @@ impl AppState {
             }
         }
         if let Ok(mut first) = self.first.lock() {
-            *first = Some(snap);
+            *first = Some((Instant::now(), snap));
         }
     }
 
@@ -220,8 +220,11 @@ impl AppState {
             return Err("load the full comparison first".into());
         }
         if from.is_none() && to.is_none() {
-            if let Some(snap) = self.first.lock().ok().and_then(|mut f| f.take()) {
-                return Ok(snap);
+            // Only while fresh: a page opened later (another commit made meanwhile) gets a new one.
+            if let Some((at, snap)) = self.first.lock().ok().and_then(|mut f| f.take()) {
+                if at.elapsed() < Duration::from_secs(20) {
+                    return Ok(snap);
+                }
             }
         }
         let range = RangeInfo { from, to };

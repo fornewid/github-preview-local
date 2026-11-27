@@ -198,6 +198,11 @@ function NothingToCompare() {
             <code>{base}</code> is up to date with all commits from <code>{head}</code>, so there is nothing to review.
           </>
         )}{' '}
+        {nothing.uncommitted && (
+          <>
+            There are uncommitted changes: <code>gh-prv-local --uncommitted</code> reviews them.{' '}
+          </>
+        )}
         Run gh-prv-local in the folder of the branch to review (<code>-C &lt;path&gt;</code>), or pass <code>--head &lt;branch&gt;</code>.
       </p>
       {nothing.worktrees.length > 0 && (

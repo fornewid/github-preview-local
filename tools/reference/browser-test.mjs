@@ -217,6 +217,8 @@ async function submitWithCloseTab(port, { extraEntry }) {
 {
   const run = start(19616, ['--head', base])
   const url = await run.url
+  // stdout and stderr arrive separately: wait for the note.
+  for (let i = 0; i < 50 && !/nothing to review/.test(run.out()); i++) await new Promise((r) => setTimeout(r, 100))
   check('nothing to review: said on stdout before the page opens', /# Pull request preview: nothing to review/.test(run.out()) && new RegExp(`\`${base}\` is the base branch`).test(run.out()) && /gh-prv-local -C <path>/.test(run.out()), run.out().slice(0, 300))
   const { browser, page: tab } = await openChrome({ width: 1200, height: 800 })
   await tab.goto(url)

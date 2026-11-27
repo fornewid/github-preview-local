@@ -95,6 +95,8 @@ export interface Snapshot {
 export interface NothingToReview {
   /** Head is the base branch itself. */
   onBase: boolean
+  /** There are uncommitted changes, not part of this review (no --uncommitted). */
+  uncommitted: boolean
   worktrees: Array<{ path: string; branch: string; ahead: number }>
 }
 

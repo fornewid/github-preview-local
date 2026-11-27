@@ -836,6 +836,7 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
     // point at the worktrees that have something.
     let nothing = (range.from.is_none() && commits.is_empty() && files.is_empty()).then(|| NothingToReview {
         on_base: head_name == base_name || head_ref == base_ref,
+        uncommitted: dirty && mode == "committed",
         worktrees: worktrees_ahead(git, &base_sha),
     });
 
@@ -895,6 +896,7 @@ fn worktrees_ahead(git: &Git, base: &str) -> Vec<WorktreeAhead> {
         .filter_map(|block| {
             let path = block.lines().find_map(|l| l.strip_prefix("worktree "))?;
             let branch = block.lines().find_map(|l| l.strip_prefix("branch refs/heads/"))?;
+            // This worktree, or one whose folder is gone (prunable).
             if std::fs::canonicalize(path).map(|p| p == here).unwrap_or(true) {
                 return None;
             }
@@ -1367,6 +1369,7 @@ mod tests {
         assert!(n.on_base);
         assert_eq!(n.worktrees.len(), 1, "{:?}", n.worktrees);
         assert_eq!((n.worktrees[0].branch.as_str(), n.worktrees[0].ahead), ("feature", 1));
+        assert!(!n.uncommitted);
         let text = n.text("main", "main");
         assert!(text.contains("`main` is the base branch") && text.contains("gh-prv-local -C '"), "{text}");
         // Up to date with base, but not the base branch.
@@ -1374,8 +1377,10 @@ mod tests {
         assert!(!r.snapshot.nothing.expect("nothing on idle").on_base);
         // The branch with a commit has something to review.
         assert!(snapshot(&in_work, &opts, &RangeInfo::default()).unwrap().snapshot.nothing.is_none());
-        // Uncommitted changes reviewed with --uncommitted are something to review.
+        // Uncommitted changes: --uncommitted is named, and with it they are something to review.
         std::fs::write(dir.join("f.txt"), "changed").unwrap();
+        let n = snapshot(&git, &opts, &RangeInfo::default()).unwrap().snapshot.nothing.unwrap();
+        assert!(n.uncommitted && n.text("main", "main").contains("--uncommitted"));
         let wip = Options { fetch: false, uncommitted: true, ..Default::default() };
         assert!(snapshot(&git, &wip, &RangeInfo::default()).unwrap().snapshot.nothing.is_none());
     }

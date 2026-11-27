@@ -113,6 +113,8 @@ pub struct Snapshot {
 pub struct NothingToReview {
     /// Head is the base branch itself (otherwise it is only up to date with it).
     pub on_base: bool,
+    /// There are uncommitted changes, not part of this review (no `--uncommitted`).
+    pub uncommitted: bool,
     /// Other worktrees of the repository whose branch has commits to review, most recent first.
     pub worktrees: Vec<WorktreeAhead>,
 }
@@ -134,6 +136,9 @@ impl NothingToReview {
         } else {
             format!("`{head}` has no commits that are not on `{base}`, so there is nothing to review.")
         };
+        if self.uncommitted {
+            s.push_str(" There are uncommitted changes: `gh-prv-local --uncommitted` reviews them.");
+        }
         s.push_str(" Run gh-prv-local in the folder of the branch to review (`gh-prv-local -C <path>`), or pass `--head <branch>`.");
         if !self.worktrees.is_empty() {
             s.push_str(" Worktrees with commits to review:");
