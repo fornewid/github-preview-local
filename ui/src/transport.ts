@@ -165,13 +165,14 @@ async function createHttp(): Promise<Transport> {
     if (!sessionStorage.getItem('prv:token')) throw new Error(failure)
   }
   const token = sessionStorage.getItem('prv:token')
-  // Another tab or window with the address bar's address (the code left it): the token is this
-  // tab's alone, so say so rather than call the address wrong.
-  if (!token)
+  // No token for this tab: mostly a new tab or window given the address bar's address (the code is
+  // gone from it). The token stays with the tab that traded the code, so say that.
+  if (!token) {
     throw new Error(
-      'This address works only in the tab gh-prv-local opened; it cannot be shared with another tab or window. ' +
-        'Go back to that tab, or run gh-prv-local again for a new address.',
+      'This tab has no access to the review: the address works only in the tab gh-prv-local opened, ' +
+        'not in a new tab or window. Go back to that tab, or run gh-prv-local again for a new address.',
     )
+  }
   const call = async <T,>(cmd: string, args: Record<string, unknown> = {}): Promise<T> => {
     const r = await fetch(`/api/${cmd}`, {
       method: 'POST',

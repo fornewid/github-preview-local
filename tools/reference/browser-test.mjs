@@ -80,12 +80,13 @@ function start(port) {
   const other = await ctx.newPage()
   await other.goto(tab.url())
   const bare = await other.locator('.App-error').innerText({ timeout: 20000 })
-  check('the address bar address in another tab says it works only in the first tab', /works only in the tab gh-prv-local opened/.test(bare), bare)
+  check('the address bar address in another tab says it works only in the first tab', /works only in the tab gh-prv-local opened, not in a new tab or window/.test(bare), bare)
   await other.goto(url)
   const again = await other.locator('.App-error').innerText({ timeout: 20000 })
   check('the printed address in another tab says it was already opened', /already opened/.test(again), again)
   await other.close()
-  check('the first tab keeps working', (await tab.locator('.App-error').count()) === 0)
+  const still = await tab.evaluate(async () => (await fetch('/api/list_checks', { method: 'POST', headers: { 'X-Prv-Token': sessionStorage.getItem('prv:token') }, body: '{}' })).status)
+  check('the first tab keeps working', still === 200 && (await tab.locator('.App-error').count()) === 0, String(still))
   // Links: another site opens in a new tab, a relative link does nothing; the review stays.
   await tab.evaluate(() => {
     const st = window.__prv.getState()
