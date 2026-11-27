@@ -49,7 +49,7 @@ When it exits, its stdout is the review:
   was pushed. Report it and go on with what the user asked for. It is not a request to push or to
   open a pull request: do that only when the user asks. With `--publish` the branch was pushed and
   the pull request opened (URL included): report it and do not push again.
-- `# Pull request preview: nothing to review` (at the top, above the result) — the folder is on the
+- `# Pull request preview: nothing to review` (usually at the top, above the result) — the folder is on the
   base branch, or its branch has nothing that is not on the base, so the page was empty. It names
   other worktrees with commits to review: when it is clear which branch the user meant, run the
   review again with `-C <that worktree>` (or `--uncommitted` when it says the work is uncommitted

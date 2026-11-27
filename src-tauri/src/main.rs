@@ -197,26 +197,34 @@ impl AppState {
         // Under the page's lock, outside its tickets: a page load that comes meanwhile waits for
         // this and takes it as its own (below), instead of making it again.
         let Ok(_one) = self.snapshot_lock.lock() else { return };
+        // The page loaded first: its comparison says it.
+        if let Some(cur) = self.current().filter(|c| c.snapshot.range.from.is_none()) {
+            self.say_nothing(&cur.snapshot);
+            return;
+        }
         let mut opts = self.opts.clone();
         opts.fetch = !self.loaded_once.load(Ordering::SeqCst);
         let Ok(r) = git::snapshot(&self.git, &opts, &RangeInfo::default()) else { return };
         self.loaded_once.store(true, Ordering::SeqCst);
         let snap = r.snapshot.clone();
-        if let Some(n) = &snap.nothing {
-            let text = n.text(&snap.head.name, &snap.base.name);
-            eprintln!("gh-prv-local: {text}");
-            if self.format == Format::Markdown {
-                let mut out = std::io::stdout().lock();
-                let _ = writeln!(out, "# Pull request preview: nothing to review\n\n{text}\n");
-                let _ = out.flush();
-            }
-        }
+        self.say_nothing(&snap);
         // For the page's first load, unless it has loaded already.
         if let (Ok(mut cur), Ok(mut first)) = (self.current.lock(), self.first.lock()) {
             if cur.is_none() {
                 *cur = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
                 *first = Some((Instant::now(), snap));
             }
+        }
+    }
+
+    fn say_nothing(&self, snap: &Snapshot) {
+        let Some(n) = &snap.nothing else { return };
+        let text = n.text(&snap.head.name, &snap.base.name);
+        eprintln!("gh-prv-local: {text}");
+        if self.format == Format::Markdown {
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "# Pull request preview: nothing to review\n\n{text}\n");
+            let _ = out.flush();
         }
     }
 

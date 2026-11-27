@@ -27,7 +27,7 @@ with `--base <branch>` added. Review rounds repeat until the user confirms or st
   request: do that only when the user asks for it.
   - If the result says the branch was pushed and shows the pull request URL (`--publish`): report
     it. Do not push again.
-- **Nothing to review** (at the top of the output when the run ends): the folder is on the base branch, or
+- **Nothing to review** (in the output when the run ends, usually at the top): the folder is on the base branch, or
   its branch has nothing that is not on the base, so the page was empty. The output names other
   worktrees with commits to review. If it is clear which branch the user meant (the one you were
   working on), run the review again with `-C <that worktree>` (or with `--uncommitted` when it
