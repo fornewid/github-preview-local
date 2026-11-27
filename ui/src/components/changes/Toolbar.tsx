@@ -268,6 +268,17 @@ export function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
+      const inBox = !t || !!t.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')
+      // Cmd/Ctrl+Shift+Enter (github.com's "Submit a review comment" on Files changed): the review
+      // panel with its summary box focused, where Cmd/Ctrl+Enter submits. Not from a text box.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key === 'Enter' && !inBox) {
+        const st = useStore.getState()
+        if (st.snapshot && !st.submitted) {
+          e.preventDefault()
+          st.openReview(undefined)
+        }
+        return
+      }
       if (e.metaKey || e.ctrlKey || e.altKey || !t || t.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
       const { applySettings, settings } = useStore.getState()
       if (e.key === 'i') applySettings({ minimizeComments: !settings.minimizeComments })

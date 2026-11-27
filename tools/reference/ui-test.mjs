@@ -98,6 +98,24 @@ await check('file comment from the header', async () => {
   assert(await first().locator('.DiffFileComments .ReviewThread').count() === 1, 'file thread')
 })
 
+await check('Cmd/Ctrl+Shift+Enter opens Submit review with the summary focused (not from a text box)', async () => {
+  await first().locator('td.left-side-diff-cell').nth(5).hover()
+  await first().locator('td.left-side-diff-cell').nth(5).getByRole('button', { name: 'Add comment' }).click()
+  await settle()
+  await page.getByRole('textbox', { name: 'Add diff comment' }).press('ControlOrMeta+Shift+Enter')
+  await settle()
+  assert(!(await page.getByRole('textbox', { name: 'Review body' }).count()), 'not from a comment box')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await page.locator('body').click({ position: { x: 5, y: 600 } })
+  await page.keyboard.press('ControlOrMeta+Shift+Enter')
+  await settle()
+  const focused = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))
+  assert(focused === 'Review body', `focus: ${focused}`)
+  await page.keyboard.press('Escape')
+  await settle()
+  assert(!(await page.getByRole('textbox', { name: 'Review body' }).count()), 'Escape closes it')
+})
+
 await check('toolbar comment counter and comments panel', async () => {
   const btn = page.getByRole('button', { name: 'Open comments panel' })
   assert((await btn.innerText()).includes('2'), 'counter shows 2')

@@ -123,7 +123,8 @@ gh-prv-local update [version]        # install the latest release (or that one) 
 ```
 
 Settings from the gear menu (*Unified / Split*, *Whitespace changes*, *Minimize comments* — `i`,
-*Compact line height*) are remembered, like on GitHub. `t` focuses the file filter. The side
+*Compact line height*) are remembered, like on GitHub. `t` focuses the file filter, and
+Cmd/Ctrl+Shift+Enter opens *Submit review* (Cmd/Ctrl+Enter in its summary box submits). The side
 panel can be resized by dragging its edge. Cmd/Ctrl + `=` / `-` / `0` zoom the native window (the
 level is remembered); in a browser tab (and an export) use the browser's zoom.
 
