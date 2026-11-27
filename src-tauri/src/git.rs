@@ -902,8 +902,11 @@ fn worktrees_ahead(git: &Git, base: &str) -> Vec<WorktreeAhead> {
             }
             let reference = format!("refs/heads/{branch}");
             let ahead: usize = git.line(&["rev-list", "--count", &format!("{base}..{reference}")])?.parse().ok()?;
+            if ahead == 0 {
+                return None;
+            }
             let time: i64 = git.line(&["log", "-1", "--format=%ct", &reference])?.parse().ok()?;
-            (ahead > 0).then(|| (time, WorktreeAhead { path: path.into(), branch: branch.into(), ahead }))
+            Some((time, WorktreeAhead { path: path.into(), branch: branch.into(), ahead }))
         })
         .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0));

@@ -185,11 +185,23 @@ impl AppState {
         }
     }
 
-    /// Before the page opens: when head has nothing to review against base, say so on the
-    /// terminal (and on stdout for the agent, in Markdown), with what to do. A failure is left for
-    /// the page to show.
-    fn announce(&self) {
-        let Ok(snap) = self.snapshot(None, None) else { return };
+    /// While the page opens (on its own thread, so the page does not wait for it): when head has
+    /// nothing to review against base, say so on the terminal (and on stdout for the agent, in
+    /// Markdown), with what to do. A failure is left for the page to show.
+    fn announce(self: &Arc<Self>) {
+        let me = self.clone();
+        std::thread::spawn(move || me.announce_now());
+    }
+
+    fn announce_now(&self) {
+        // Under the page's lock, outside its tickets: a page load that comes meanwhile waits for
+        // this and takes it as its own (below), instead of making it again.
+        let Ok(_one) = self.snapshot_lock.lock() else { return };
+        let mut opts = self.opts.clone();
+        opts.fetch = !self.loaded_once.load(Ordering::SeqCst);
+        let Ok(r) = git::snapshot(&self.git, &opts, &RangeInfo::default()) else { return };
+        self.loaded_once.store(true, Ordering::SeqCst);
+        let snap = r.snapshot.clone();
         if let Some(n) = &snap.nothing {
             let text = n.text(&snap.head.name, &snap.base.name);
             eprintln!("gh-prv-local: {text}");
@@ -199,8 +211,12 @@ impl AppState {
                 let _ = out.flush();
             }
         }
-        if let Ok(mut first) = self.first.lock() {
-            *first = Some((Instant::now(), snap));
+        // For the page's first load, unless it has loaded already.
+        if let (Ok(mut cur), Ok(mut first)) = (self.current.lock(), self.first.lock()) {
+            if cur.is_none() {
+                *cur = Some(Arc::new(Current { snapshot: r.snapshot, ends: r.ends, remote: r.remote }));
+                *first = Some((Instant::now(), snap));
+            }
         }
     }
 
@@ -219,14 +235,7 @@ impl AppState {
         } else if from.is_some() || to.is_some() {
             return Err("load the full comparison first".into());
         }
-        if from.is_none() && to.is_none() {
-            // Only while fresh: a page opened later (another commit made meanwhile) gets a new one.
-            if let Some((at, snap)) = self.first.lock().ok().and_then(|mut f| f.take()) {
-                if at.elapsed() < Duration::from_secs(20) {
-                    return Ok(snap);
-                }
-            }
-        }
+        let first = from.is_none() && to.is_none();
         let range = RangeInfo { from, to };
         let ticket = self.snapshot_ticket.fetch_add(1, Ordering::SeqCst) + 1;
         let newest = || self.snapshot_ticket.load(Ordering::SeqCst) == ticket;
@@ -234,6 +243,15 @@ impl AppState {
         // A newer one was asked for meanwhile: this answer would be stale (the page ignores it).
         if !newest() {
             return Err(SUPERSEDED.into());
+        }
+        // The comparison made at the start (announce), once and only while fresh: a page opened
+        // later (another commit made meanwhile) gets a new one.
+        if first {
+            if let Some((at, snap)) = self.first.lock().ok().and_then(|mut f| f.take()) {
+                if at.elapsed() < Duration::from_secs(20) {
+                    return Ok(snap);
+                }
+            }
         }
         let mut opts = self.opts.clone();
         // Fetch until a load has succeeded once.
