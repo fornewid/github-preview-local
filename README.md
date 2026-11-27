@@ -205,8 +205,8 @@ gh-prv-local (Rust CLI)                                     browser tab (HTTP, 1
 For a browser tab, the CLI serves the page and the window's calls over HTTP on 127.0.0.1 (port
 19514, or a free one; `GH_PRV_LOCAL_PORT` picks it, e.g. to forward it over SSH with
 `--browser=none`). The address it opens carries a one-time code: the page trades it for the run's
-token once (so the address is useless to anyone who sees it later), sends the token with every
-call, and the server also checks the `Host`, `Origin` and `Sec-Fetch-Site` headers. On a Mac the
+token once (so the address is useless to anyone who sees it later), keeps it for that tab only
+(the address bar's address does not work in another tab or window), sends it with every call, and the server also checks the `Host`, `Origin` and `Sec-Fetch-Site` headers. On a Mac the
 default browser gets the address through AppleScript, so no command line carries it; a named
 browser or Linux's `xdg-open` show it on a command line for a moment, so on a machine that others
 log in to, prefer `--browser=none` and open the address yourself.

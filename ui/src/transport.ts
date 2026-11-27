@@ -165,7 +165,13 @@ async function createHttp(): Promise<Transport> {
     if (!sessionStorage.getItem('prv:token')) throw new Error(failure)
   }
   const token = sessionStorage.getItem('prv:token')
-  if (!token) throw new Error('This page has no access to gh-prv-local. Open the address gh-prv-local printed when it started (each address works once).')
+  // Another tab or window with the address bar's address (the code left it): the token is this
+  // tab's alone, so say so rather than call the address wrong.
+  if (!token)
+    throw new Error(
+      'This address works only in the tab gh-prv-local opened; it cannot be shared with another tab or window. ' +
+        'Go back to that tab, or run gh-prv-local again for a new address.',
+    )
   const call = async <T,>(cmd: string, args: Record<string, unknown> = {}): Promise<T> => {
     const r = await fetch(`/api/${cmd}`, {
       method: 'POST',

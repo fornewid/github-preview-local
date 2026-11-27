@@ -76,6 +76,16 @@ function start(port) {
   await tab.reload()
   await tab.waitForSelector('.DiffEntry', { timeout: 20000 })
   check('a reload keeps working (token kept for the tab)', (await tab.locator('.App-error').count()) === 0)
+  // The address bar's address, or the printed one, in another tab: a message that says why.
+  const other = await ctx.newPage()
+  await other.goto(tab.url())
+  const bare = await other.locator('.App-error').innerText({ timeout: 20000 })
+  check('the address bar address in another tab says it works only in the first tab', /works only in the tab gh-prv-local opened/.test(bare), bare)
+  await other.goto(url)
+  const again = await other.locator('.App-error').innerText({ timeout: 20000 })
+  check('the printed address in another tab says it was already opened', /already opened/.test(again), again)
+  await other.close()
+  check('the first tab keeps working', (await tab.locator('.App-error').count()) === 0)
   // Links: another site opens in a new tab, a relative link does nothing; the review stays.
   await tab.evaluate(() => {
     const st = window.__prv.getState()
