@@ -279,7 +279,7 @@ export function useShortcuts() {
         }
         return
       }
-      if (e.metaKey || e.ctrlKey || e.altKey || !t || t.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
+      if (e.metaKey || e.ctrlKey || e.altKey || inBox) return
       const { applySettings, settings } = useStore.getState()
       if (e.key === 'i') applySettings({ minimizeComments: !settings.minimizeComments })
       else if (e.key === 't') {
