@@ -88,6 +88,14 @@ export interface Snapshot {
   publish?: boolean
   /** The base was not given (--base) but taken as the branch head was started from. */
   guessedBase?: boolean
+  /** No commits and no changes against base: why, and other worktrees with something to review. */
+  nothing?: NothingToReview | null
+}
+
+export interface NothingToReview {
+  /** Head is the base branch itself. */
+  onBase: boolean
+  worktrees: Array<{ path: string; branch: string; ahead: number }>
 }
 
 export type Side = 'LEFT' | 'RIGHT'

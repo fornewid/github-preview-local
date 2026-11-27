@@ -1998,6 +1998,20 @@ a.CommitRow-sha {
 .Blankslate-note {
   font-size: 12px;
 }
+.NothingToCompare p {
+  margin: 0 auto 8px;
+  max-width: 640px;
+}
+.NothingToCompare-worktrees {
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.NothingToCompare-worktrees li {
+  margin-top: 4px;
+}
 .Blankslate-pre {
   display: inline-block;
   font-size: 12px;

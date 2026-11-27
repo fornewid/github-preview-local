@@ -113,7 +113,8 @@ gh-prv-local --browser=chrome        # in a given browser (or GH_PRV_LOCAL_BROWS
 gh-prv-local --window                # in a native window instead (no server)
 gh-prv-local --publish               # Confirm pushes the branch and opens the pull request itself
 gh-prv-local --format json           # JSON review on stdout
-gh-prv-local -C path/to/repo         # run in another repository
+gh-prv-local -C path/to/repo         # run in another repository (or worktree); run on the base branch, it says
+                                     # there is nothing to review and names worktrees with commits to review
 
 gh-prv-local export [--open] [-o f]  # self-contained HTML (UI + data), opens from disk — for SSH/remote
 gh-prv-local checks [--json] [name]  # run local checks headless (exit 1 on failure)

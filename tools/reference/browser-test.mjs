@@ -12,9 +12,9 @@ const [, , bin, repo, base = 'main'] = process.argv
 const results = []
 const check = (name, ok, detail = '') => results.push(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : ': ' + detail}`)
 
-function start(port) {
+function start(port, extra = []) {
   // No flag: a browser tab is the default; GH_PRV_LOCAL_BROWSER=none only prints the address.
-  const p = spawn(bin, ['-C', repo, '--no-fetch', '--base', base], { env: { ...process.env, GH_PRV_LOCAL_PORT: String(port), GH_PRV_LOCAL_BROWSER: 'none' } })
+  const p = spawn(bin, ['-C', repo, '--no-fetch', '--base', base, ...extra], { env: { ...process.env, GH_PRV_LOCAL_PORT: String(port), GH_PRV_LOCAL_BROWSER: 'none' } })
   let out = ''
   let err = ''
   p.stdout.on('data', (d) => (out += d))
@@ -212,6 +212,20 @@ async function submitWithCloseTab(port, { extraEntry }) {
   if (code === 'timeout') run.p.kill()
   check('Confirm: the approval on stdout, ending the review (no push, no pull request asked for)', code === 0 && /Pull request preview: Confirmed/.test(run.out()) && /nothing was pushed/.test(run.out()) && !/open the pull request into/.test(run.out()) && /Ship it/.test(run.out()), `${code} ${run.out().slice(0, 300)}`)
   await browser.close()
+}
+// 6. Head is the base branch: nothing to review, said before the page opens and in the page.
+{
+  const run = start(19616, ['--head', base])
+  const url = await run.url
+  check('nothing to review: said on stdout before the page opens', /# Pull request preview: nothing to review/.test(run.out()) && new RegExp(`\`${base}\` is the base branch`).test(run.out()) && /gh-prv-local -C <path>/.test(run.out()), run.out().slice(0, 300))
+  const { browser, page: tab } = await openChrome({ width: 1200, height: 800 })
+  await tab.goto(url)
+  const text = await tab.locator('.NothingToCompare').innerText({ timeout: 20000 })
+  check('nothing to review: the page says why and what to do', /There isn.t anything to compare/.test(text) && /is the base branch/.test(text) && /--head <branch>/.test(text), text)
+  await browser.close()
+  const code = await Promise.race([run.exit, new Promise((r) => setTimeout(() => r('timeout'), 45000))])
+  if (code === 'timeout') run.p.kill()
+  check('nothing to review: closing the tab ends the run', code === 0 && /closed/.test(run.out()), `${code} ${run.out().slice(-200)}`)
 }
 console.log(results.join('\n'))
 process.exit(results.some((r) => r.startsWith('FAIL')) ? 1 : 0)

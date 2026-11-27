@@ -141,6 +141,9 @@ struct AppState {
     snapshot_ticket: std::sync::atomic::AtomicU64,
     /// The review was taken: later saves (still on their way) must not bring its comments back.
     submitted: AtomicBool,
+    /// The comparison made before the page opened (to say when there is nothing to review), handed
+    /// to the page's first load instead of making it again.
+    first: Mutex<Option<Snapshot>>,
 }
 
 #[derive(Clone, Default, serde::Serialize)]
@@ -178,6 +181,26 @@ impl AppState {
             snapshot_lock: Mutex::new(()),
             snapshot_ticket: std::sync::atomic::AtomicU64::new(0),
             submitted: AtomicBool::new(false),
+            first: Mutex::new(None),
+        }
+    }
+
+    /// Before the page opens: when head has nothing to review against base, say so on the
+    /// terminal (and on stdout for the agent, in Markdown), with what to do. A failure is left for
+    /// the page to show.
+    fn announce(&self) {
+        let Ok(snap) = self.snapshot(None, None) else { return };
+        if let Some(n) = &snap.nothing {
+            let text = n.text(&snap.head.name, &snap.base.name);
+            eprintln!("gh-prv-local: {text}");
+            if self.format == Format::Markdown {
+                let mut out = std::io::stdout().lock();
+                let _ = writeln!(out, "# Pull request preview: nothing to review\n\n{text}\n");
+                let _ = out.flush();
+            }
+        }
+        if let Ok(mut first) = self.first.lock() {
+            *first = Some(snap);
         }
     }
 
@@ -195,6 +218,11 @@ impl AppState {
             }
         } else if from.is_some() || to.is_some() {
             return Err("load the full comparison first".into());
+        }
+        if from.is_none() && to.is_none() {
+            if let Some(snap) = self.first.lock().ok().and_then(|mut f| f.take()) {
+                return Ok(snap);
+            }
         }
         let range = RangeInfo { from, to };
         let ticket = self.snapshot_ticket.fetch_add(1, Ordering::SeqCst) + 1;
@@ -777,7 +805,9 @@ fn main() {
         None if cli.window || selftest_mode().is_some() => run_window(git, opts, cli.format),
         None => {
             let browser = cli.browser.or_else(|| std::env::var("GH_PRV_LOCAL_BROWSER").ok()).unwrap_or_default();
-            serve::run(Arc::new(AppState::new(git, opts, cli.format, false)), browser.trim())
+            let state = Arc::new(AppState::new(git, opts, cli.format, false));
+            state.announce();
+            serve::run(state, browser.trim())
         }
     }
 }
@@ -809,6 +839,9 @@ fn run_window(git: Git, opts: Options, format: Format) {
         }
     }
     let state = Arc::new(AppState::new(git, opts, format, selftest));
+    if !selftest {
+        state.announce();
+    }
     let app = tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![

@@ -27,6 +27,10 @@ with `--base <branch>` added. Review rounds repeat until the user confirms or st
   request: do that only when the user asks for it.
   - If the result says the branch was pushed and shows the pull request URL (`--publish`): report
     it. Do not push again.
+- **Nothing to review** (printed first, before the result): the folder is on the base branch, or
+  its branch has nothing that is not on the base, so the page was empty. The output names other
+  worktrees with commits to review. If it is clear which branch the user meant (the one you were
+  working on), run the review again with `-C <that worktree>`; otherwise tell the user and ask.
 - **Closed without a review**: the user stopped; acknowledge and continue; do not change anything.
 - **Not opened**: no page opened the review within 10 minutes; the rounds end. Tell the user; offer
   to run it again.

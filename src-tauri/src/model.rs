@@ -103,6 +103,47 @@ pub struct Snapshot {
     pub publish: bool,
     /// The base was not given (--base) but taken as the branch head was started from.
     pub guessed_base: bool,
+    /// Head has nothing to review against base (no commits, no changes): why, and where to look.
+    pub nothing: Option<NothingToReview>,
+}
+
+/// No commits and no changes: head is the base branch, or has nothing that is not on it.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NothingToReview {
+    /// Head is the base branch itself (otherwise it is only up to date with it).
+    pub on_base: bool,
+    /// Other worktrees of the repository whose branch has commits to review, most recent first.
+    pub worktrees: Vec<WorktreeAhead>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeAhead {
+    pub path: String,
+    pub branch: String,
+    /// Commits not on the base branch.
+    pub ahead: usize,
+}
+
+impl NothingToReview {
+    /// What happened and what to do, for the terminal and the agent.
+    pub fn text(&self, head: &str, base: &str) -> String {
+        let mut s = if self.on_base {
+            format!("`{head}` is the base branch, so there is nothing to review.")
+        } else {
+            format!("`{head}` has no commits that are not on `{base}`, so there is nothing to review.")
+        };
+        s.push_str(" Run gh-prv-local in the folder of the branch to review (`gh-prv-local -C <path>`), or pass `--head <branch>`.");
+        if !self.worktrees.is_empty() {
+            s.push_str(" Worktrees with commits to review:");
+            for w in &self.worktrees {
+                let n = if w.ahead == 1 { "1 commit".to_string() } else { format!("{} commits", w.ahead) };
+                s.push_str(&format!("\n  gh-prv-local -C '{}'   ({}, {n})", w.path.replace('\'', "'\\''"), w.branch));
+            }
+        }
+        s
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

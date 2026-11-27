@@ -118,6 +118,7 @@ function Page() {
 
 function FilesTab({ warnings }: { warnings: string[] }) {
   const files = useStore((st) => st.snapshot!.files)
+  const nothing = useStore((st) => !!st.snapshot!.nothing && !st.range.from)
   // Not the filter text: only the file tree reads it, so typing re-renders just the tree.
   const { exts, showViewed } = useStore(useShallow((st) => ({ exts: st.filter.exts, showViewed: st.filter.showViewed })))
   const viewed = useStore((st) => st.viewed)
@@ -170,10 +171,51 @@ function FilesTab({ warnings }: { warnings: string[] }) {
           </Flash>
         )}
         <ErrorBoundary>
-          <DiffList files={shown} />
+          {nothing ? <NothingToCompare /> : <DiffList files={shown} />}
         </ErrorBoundary>
       </PageLayout.Content>
     </>
+  )
+}
+
+/**
+ * github.com's compare page with nothing in it ("There isn't anything to compare."), saying why
+ * (head is the base branch, or has nothing that is not on it) and where the work may be.
+ */
+function NothingToCompare() {
+  const { head, base, nothing } = useStore(useShallow((st) => ({ head: st.snapshot!.head.name, base: st.snapshot!.base.name, nothing: st.snapshot!.nothing! })))
+  const quote = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`
+  return (
+    <div className="DiffList-empty NothingToCompare">
+      <h3>There isn’t anything to compare.</h3>
+      <p>
+        {nothing.onBase ? (
+          <>
+            <code>{head}</code> is the base branch, so there is nothing to review.
+          </>
+        ) : (
+          <>
+            <code>{base}</code> is up to date with all commits from <code>{head}</code>, so there is nothing to review.
+          </>
+        )}{' '}
+        Run gh-prv-local in the folder of the branch to review (<code>-C &lt;path&gt;</code>), or pass <code>--head &lt;branch&gt;</code>.
+      </p>
+      {nothing.worktrees.length > 0 && (
+        <>
+          <p>Worktrees with commits to review:</p>
+          <ul className="NothingToCompare-worktrees">
+            {nothing.worktrees.map((w) => (
+              <li key={w.path}>
+                <code>gh-prv-local -C {quote(w.path)}</code>{' '}
+                <span>
+                  ({w.branch}, {w.ahead === 1 ? '1 commit' : `${w.ahead} commits`})
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
   )
 }
 

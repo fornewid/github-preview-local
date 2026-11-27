@@ -832,6 +832,13 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         }
     })?;
 
+    // Nothing to review (GitHub's compare says "There isn't anything to compare"): say why and
+    // point at the worktrees that have something.
+    let nothing = (range.from.is_none() && commits.is_empty() && files.is_empty()).then(|| NothingToReview {
+        on_base: head_name == base_name || head_ref == base_ref,
+        worktrees: worktrees_ahead(git, &base_sha),
+    });
+
     let author = git
         .line(&["config", "user.name"])
         .or_else(|| commits.last().map(|c| c.author.clone()))
@@ -873,8 +880,32 @@ pub fn snapshot(git: &Git, opts: &Options, range: &RangeInfo) -> Result<Resolved
         existing_pr: None,
         publish: opts.publish,
         guessed_base,
+        nothing,
     };
     Ok(Resolved { snapshot, ends, remote })
+}
+
+/// The repository's other worktrees on a branch with commits that are not in `base`: the three
+/// most recently committed to (a repository can have many).
+fn worktrees_ahead(git: &Git, base: &str) -> Vec<WorktreeAhead> {
+    let Ok(list) = git.run(&["worktree", "list", "--porcelain"]) else { return vec![] };
+    let here = std::fs::canonicalize(&git.root).unwrap_or_else(|_| git.root.clone());
+    let mut found: Vec<(i64, WorktreeAhead)> = list
+        .split("\n\n")
+        .filter_map(|block| {
+            let path = block.lines().find_map(|l| l.strip_prefix("worktree "))?;
+            let branch = block.lines().find_map(|l| l.strip_prefix("branch refs/heads/"))?;
+            if std::fs::canonicalize(path).map(|p| p == here).unwrap_or(true) {
+                return None;
+            }
+            let reference = format!("refs/heads/{branch}");
+            let ahead: usize = git.line(&["rev-list", "--count", &format!("{base}..{reference}")])?.parse().ok()?;
+            let time: i64 = git.line(&["log", "-1", "--format=%ct", &reference])?.parse().ok()?;
+            (ahead > 0).then(|| (time, WorktreeAhead { path: path.into(), branch: branch.into(), ahead }))
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().take(3).map(|(_, w)| w).collect()
 }
 
 /// Names from `Co-authored-by: Name <email>` trailer values (separated by \x1d), one per email
@@ -1303,6 +1334,50 @@ mod tests {
         let r = snapshot(&git, &opts, &RangeInfo::default()).unwrap();
         assert_eq!((r.snapshot.base.name.as_str(), r.snapshot.commits.len()), ("main", 1));
         assert!(r.snapshot.warnings.is_empty(), "{:?}", r.snapshot.warnings);
+    }
+
+    #[test]
+    fn nothing_to_review_on_the_base_branch_names_worktrees_with_commits() {
+        let (git, dir) = scratch_repo(&[
+            ("remote.origin.url", "https://github.com/me/n.git"),
+            ("user.name", "t"),
+            ("user.email", "t@example.com"),
+        ]);
+        let run = |args: &[&str]| git.run(args).unwrap();
+        std::fs::write(dir.join("f.txt"), "1").unwrap();
+        run(&["checkout", "-q", "-b", "main"]);
+        run(&["add", "f.txt"]);
+        run(&["commit", "-q", "-m", "c1"]);
+        let c1 = run(&["rev-parse", "HEAD"]).trim().to_string();
+        run(&["update-ref", "refs/remotes/origin/main", &c1]);
+        run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        // Another worktree with a commit to review, and one with none.
+        let wt = TempDir::new();
+        let (work, idle) = (wt.join("work"), wt.join("idle"));
+        run(&["worktree", "add", "-q", "-b", "feature", work.to_str().unwrap()]);
+        run(&["worktree", "add", "-q", "-b", "idle", idle.to_str().unwrap()]);
+        std::fs::write(work.join("g.txt"), "2").unwrap();
+        let in_work = Git::discover(&work).unwrap();
+        in_work.run(&["add", "g.txt"]).unwrap();
+        in_work.run(&["commit", "-q", "-m", "c2"]).unwrap();
+
+        let opts = Options { fetch: false, ..Default::default() };
+        let r = snapshot(&git, &opts, &RangeInfo::default()).unwrap();
+        let n = r.snapshot.nothing.expect("nothing to review on main");
+        assert!(n.on_base);
+        assert_eq!(n.worktrees.len(), 1, "{:?}", n.worktrees);
+        assert_eq!((n.worktrees[0].branch.as_str(), n.worktrees[0].ahead), ("feature", 1));
+        let text = n.text("main", "main");
+        assert!(text.contains("`main` is the base branch") && text.contains("gh-prv-local -C '"), "{text}");
+        // Up to date with base, but not the base branch.
+        let r = snapshot(&Git::discover(&idle).unwrap(), &opts, &RangeInfo::default()).unwrap();
+        assert!(!r.snapshot.nothing.expect("nothing on idle").on_base);
+        // The branch with a commit has something to review.
+        assert!(snapshot(&in_work, &opts, &RangeInfo::default()).unwrap().snapshot.nothing.is_none());
+        // Uncommitted changes reviewed with --uncommitted are something to review.
+        std::fs::write(dir.join("f.txt"), "changed").unwrap();
+        let wip = Options { fetch: false, uncommitted: true, ..Default::default() };
+        assert!(snapshot(&git, &wip, &RangeInfo::default()).unwrap().snapshot.nothing.is_none());
     }
 
     #[test]
